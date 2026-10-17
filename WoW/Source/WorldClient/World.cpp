@@ -99,6 +99,7 @@
 #include <cstring>
 #include "WoW/Source/Object/ObjectClient/Object_C.h"
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ADEE48
 static const char* s_zonePaths[11] = {
@@ -1012,6 +1013,7 @@ void CMap::ObjectUpdate(CMapEntity* entity, C44Matrix& mat, CAaBox& box, CAaSphe
 // VERIFY: d0b5cfbd manual
 // OFFSET: 0x00781500
 void World::Preload(const C3Vector& position, int32_t showLoading) {
+    wxl::seam::World::Preload::Before(WarcraftXL::Vec3(position), showLoading);
     World::PrepareAreaOfInterest(position);
     s_preloadX = 3.4028235e38f;
     s_preloadY = 3.4028235e38f;
@@ -1033,6 +1035,7 @@ void World::Preload(const C3Vector& position, int32_t showLoading) {
         AsyncFileReadSetProgressCallback(nullptr, nullptr);
         LoadingScreenDisable();
     }
+    wxl::seam::World::Preload::After(WarcraftXL::Vec3(position), showLoading);
 }
 
 // VERIFY: a7db51a8 manual
