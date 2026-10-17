@@ -15,6 +15,7 @@
 #include <cmath>
 #include "Engine/Source/Tempest/CMath.h"
 #include "WoW/Source/WorldClient/CChunkLiquid.h"
+#include "WarcraftXL/Seams.h"
 
 void CMapArea::Destroy() {
 }
@@ -210,6 +211,7 @@ void CMapArea::PurgeChunks(CiRect* chunkRect) {
 // VERIFY: 4696cf2f manual
 // OFFSET: 0x007D6B30
 CMapChunk* CMapArea::PrepareChunk(int32_t chunkX, int32_t chunkY) {
+    wxl::seam::MapArea::PrepareChunk::Before(this, chunkX, chunkY);
     int32_t index = chunkX + 16 * chunkY;
 
     bool firstUse = true;
@@ -234,6 +236,7 @@ CMapChunk* CMapArea::PrepareChunk(int32_t chunkX, int32_t chunkY) {
     chunk->m_sOffset.y = 8 * (chunkY + this->m_tileChunkIndex.y);
     chunk->Create(reinterpret_cast<SIffChunk*>(static_cast<uint8_t*>(this->m_fileBuffer) + this->m_chunkInfo[index].m_offset), firstUse);
 
+    wxl::seam::MapArea::PrepareChunk::After(chunk, this, chunkX, chunkY);
     return chunk;
 }
 

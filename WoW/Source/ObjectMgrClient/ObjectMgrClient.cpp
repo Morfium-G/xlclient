@@ -32,6 +32,7 @@
 #include "WoW/Source/WowServices/RealmConnection.h"
 #include "WoW/Source/WowServices/WDataStore.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00DD2008
 static thread_local ObjectMgr* s_curMgr;
@@ -544,6 +545,7 @@ static int32_t SkipPartialObjectUpdate(CDataStore* msg) {
 // VERIFY: 3b1806d2 auto
 // OFFSET: 0x004D3FF0
 static void InitObject(CGObject_C* object, const CClientObjCreate& create, uint32_t time) {
+    wxl::seam::ObjectMgr::InitObject::Before(object, &create, time);
     switch (object->m_typeId) {
         case ID_ITEM: {
             new (object) CGItem_C(time, create);
@@ -585,11 +587,13 @@ static void InitObject(CGObject_C* object, const CClientObjCreate& create, uint3
             break;
         }
     }
+    wxl::seam::ObjectMgr::InitObject::After(object, &create, time);
 }
 
 // VERIFY: d78e827e manual
 // OFFSET: 0x004D4090
 static void DestroyRemovedObject(CGObject_C* object) {
+    wxl::seam::ObjectMgr::DestroyRemovedObject::Before(object);
     int32_t activePlayer = object->m_obj->m_guid == ClntObjMgrGetActivePlayer();
 
     switch (object->m_obj->m_type) {
@@ -611,6 +615,7 @@ static void DestroyRemovedObject(CGObject_C* object) {
     } else {
         ObjectFree(s_objHeapIds[object->m_typeId], object->m_heapIndex);
     }
+    wxl::seam::ObjectMgr::DestroyRemovedObject::After(object);
 }
 
 // VERIFY: e9d855a0 auto
@@ -1431,6 +1436,7 @@ static void UpdateInRangeObjects(CDataStore* msg) {
 // VERIFY: 9ca63081 manual
 // OFFSET: 0x004D6FC0
 static void ObjDelete(CGObject_C* object) {
+    wxl::seam::ObjectMgr::ObjDelete::Before(object);
     ClearMirrorLists(object);
 
     ObjectMgr* mgr = s_curMgr;
@@ -1445,6 +1451,7 @@ static void ObjDelete(CGObject_C* object) {
 
     mgr->m_lazyCleanupObjects.Insert(object, hashval, key);
     s_curMgr->m_lazyCleanupFifo[object->m_typeId - 1].LinkToTail(object);
+    wxl::seam::ObjectMgr::ObjDelete::After(object);
 }
 
 // VERIFY: 1ddf9f77 auto

@@ -44,10 +44,11 @@ else ()
         "A dropped seam call site would go unnoticed; run core/tools/seams/check_seams.py by hand.")
 endif ()
 
-# The libraries whose sources carry seam calls. WorldClient holds the World seams, Event the
-# scheduler's. A library added here needs nothing else: the calls are declared by Seams.h, which
-# these include directories make reachable.
-set(WXL_SEAM_LIBRARIES WorldClient Event)
+# The libraries whose sources carry seam calls. WorldClient holds the World and MapArea seams,
+# Event the scheduler's, ObjectMgrClient the object manager's, Object the unit's and the
+# player's, Ui the game interface's. A library added here needs nothing else: the calls are
+# declared by Seams.h, which these include directories make reachable.
+set(WXL_SEAM_LIBRARIES WorldClient Event ObjectMgrClient Object Ui)
 
 if (NOT WOWDECOMP_ARCH_64)
     foreach (target ${WXL_SEAM_LIBRARIES})
@@ -85,9 +86,10 @@ foreach (config ${CMAKE_CONFIGURATION_TYPES} ${CMAKE_BUILD_TYPE})
 endforeach ()
 
 # --- The client's side of the boundary -------------------------------------------------------------
-# What the client hands the runtime (the accessors of wxl_core_init) and the adapters the seam
-# calls use. Linked by every executable and by WorldClient, whose World.cpp holds the seam calls.
-add_library(WarcraftXLClient STATIC Init.cpp)
+# What the client hands the runtime: the accessors of wxl_core_init, one function per row of
+# core's binding table (Binding.cpp), assigned by Init.cpp. Linked by every executable and by
+# WorldClient, whose World.cpp holds the seam calls.
+add_library(WarcraftXLClient STATIC Init.cpp Binding.cpp)
 target_include_directories(WarcraftXLClient
     PUBLIC
         "${WXL_CORE_DIR}/include"

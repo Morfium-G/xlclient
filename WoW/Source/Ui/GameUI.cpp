@@ -172,6 +172,7 @@
 #include "Engine/Source/Tempest/C33Matrix.h"
 #include "WoW/Source/DB/Rec/CreatureFamilyRec.h"
 #include "WoW/Source/DB/Rec/CreatureTypeRec.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ACC3F8
 CImVector s_deadSelectionColor = CImVector(0x7F, 0x7F, 0x7F, 0xFF);
@@ -2423,11 +2424,13 @@ void CGGameUI::ResetCamera(WOWGUID guid) {
 // VERIFY: 21eb442b manual
 // OFFSET: 0x00518DC0
 void CGGameUI::SendTarget(WOWGUID guid) {
+    wxl::seam::GameUI::SendTarget::Before(guid.m_guid);
     CDataStore msg;
     msg.Put(static_cast<uint32_t>(CMSG_SET_SELECTION));
     msg.Put(guid.m_guid);
     msg.Finalize();
     ClientServices::Send2(&msg);
+    wxl::seam::GameUI::SendTarget::After(guid.m_guid);
 }
 
 // VERIFY: 57da3148 manual
@@ -2664,9 +2667,11 @@ bool IsTutorialFlagged(uint32_t tutorial) {
 // VERIFY: 9f2b88f1 manual
 // OFFSET: 0x005241B0
 void CGGameUI::ClearTarget(WOWGUID guid, int32_t a2) {
+    wxl::seam::GameUI::ClearTarget::Before(guid.m_guid, a2);
     int32_t noMgr = ClntObjMgrGetCurrent() == nullptr;
 
     if (!CGGameUI::m_lockedTarget || (guid && guid != CGGameUI::m_lockedTarget)) {
+        wxl::seam::GameUI::ClearTarget::After(guid.m_guid, a2);
         return;
     }
 
@@ -2692,6 +2697,7 @@ void CGGameUI::ClearTarget(WOWGUID guid, int32_t a2) {
     CGGameUI::m_lockedTarget = WOWGUID();
 
     if (noMgr) {
+        wxl::seam::GameUI::ClearTarget::After(guid.m_guid, a2);
         return;
     }
 
@@ -2714,6 +2720,7 @@ void CGGameUI::ClearTarget(WOWGUID guid, int32_t a2) {
         CGSpellBook::UpdateUsable();
         FrameScript_SignalEvent(SCRIPT_EVENT_PLAYER_TARGET_CHANGED, nullptr);
     }
+    wxl::seam::GameUI::ClearTarget::After(guid.m_guid, a2);
 }
 
 // VERIFY: e7c59690 manual

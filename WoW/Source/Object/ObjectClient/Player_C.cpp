@@ -151,6 +151,7 @@
 #include "WoW/Source/Ui/Tutorial.h"
 #include "WoW/Source/Ui/WorldFrame.h"
 #include "WoW/Source/UIUtil/PortraitButton.h"
+#include "WarcraftXL/Seams.h"
 
 struct GUILDUPDATETIMESTAMP {
     /* 0000 */ uint32_t m_guildId;
@@ -10506,6 +10507,7 @@ void CGPlayer_C::UpdateHandItemVisual(GEOCOMPONENTLINKS link, int32_t hand) {
 // VERIFY: 8210ca7a manual
 // OFFSET: 0x006E1E10
 void CGPlayer_C::UpdateInventoryComponent(INVENTORY_SLOTS slot, const VisibleItem_C* oldItem) {
+    wxl::seam::Player::UpdateInventoryComponent::Before(this, slot, oldItem);
     VisibleItem_C* item = nullptr;
 
     if (!oldItem || slot > 18 || !(item = &this->m_player->m_playerVisibleItems[slot])) {
@@ -10516,6 +10518,7 @@ void CGPlayer_C::UpdateInventoryComponent(INVENTORY_SLOTS slot, const VisibleIte
 
     if (abs(old->m_itemId) == abs(item->m_itemId) && (old->m_itemId > 0) == (item->m_itemId > 0)) {
         this->UpdateObjComponentVisualsSlot(item, slot);
+        wxl::seam::Player::UpdateInventoryComponent::After(this, slot, oldItem);
         return;
     }
 
@@ -10652,6 +10655,7 @@ applyEffects:
     }
 
     CGGameUI::UnitModelUpdate(this->m_obj->m_guid, 3);
+    wxl::seam::Player::UpdateInventoryComponent::After(this, slot, oldItem);
 }
 
 // VERIFY: f9d20eba manual

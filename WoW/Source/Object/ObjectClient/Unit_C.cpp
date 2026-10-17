@@ -143,6 +143,7 @@
 #include "WoW/Source/WorldClient/FrameTime.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ADAC04
 static INVENTORY_SLOTS s_virtualItemInvSlots[2] = { INVSLOT_MAINHAND, INVSLOT_OFFHAND };
@@ -10201,6 +10202,7 @@ void CGUnit_C::SetStorage(uint32_t* storage, uint32_t* saved) {
 // VERIFY: 3ba2c3ae manual
 // OFFSET: 0x00729220
 void CGUnit_C::OnDeath() {
+    wxl::seam::Unit::OnDeath::Before(this);
     if (this->m_obj->m_type & TYPEMASK_PLAYER) {
         static_cast<CGPlayer_C*>(this)->OnDeath();
     }
@@ -10251,6 +10253,7 @@ void CGUnit_C::OnDeath() {
 
     guid = this->m_obj->m_guid;
     CGGameUI::ClearInteractTarget(guid, 1);
+    wxl::seam::Unit::OnDeath::After(this);
 }
 
 // VERIFY: 2de1faa3 auto
@@ -16399,6 +16402,7 @@ float CGUnit_C::GetSpellChanceToCrit() const {
 // VERIFY: 8a2697bd auto
 // OFFSET: 0x00722090
 void CGUnit_C::OnAuraRemoved(uint32_t index, uint8_t a3, AuraData* aura, int32_t spellId) {
+    wxl::seam::Unit::OnAuraRemoved::Before(this, index, a3, aura, spellId);
     SpellRec spell;
     memset(&spell, 0, sizeof(spell));
     g_spellDB.GetRecord(spellId, &spell);
@@ -16417,11 +16421,13 @@ void CGUnit_C::OnAuraRemoved(uint32_t index, uint8_t a3, AuraData* aura, int32_t
     }
 
     UnitCombatLogAuraAddedOrRemoved(this, aura, &spell, a3, 0);
+    wxl::seam::Unit::OnAuraRemoved::After(this, index, a3, aura, spellId);
 }
 
 // VERIFY: c0256707 auto
 // OFFSET: 0x00727760
 void CGUnit_C::OnAuraAdded(uint32_t index, uint8_t a3, AuraData* aura, int32_t spellId) {
+    wxl::seam::Unit::OnAuraAdded::Before(this, index, a3, aura, spellId);
     SpellRec spell;
     memset(&spell, 0, sizeof(spell));
     g_spellDB.GetRecord(spellId, &spell);
@@ -16439,6 +16445,7 @@ void CGUnit_C::OnAuraAdded(uint32_t index, uint8_t a3, AuraData* aura, int32_t s
             FrameScript_SignalEvent(SCRIPT_EVENT_UPDATE_SHAPESHIFT_FORM, nullptr);
         }
     }
+    wxl::seam::Unit::OnAuraAdded::After(this, index, a3, aura, spellId);
 }
 
 // VERIFY: 1f07a103 manual

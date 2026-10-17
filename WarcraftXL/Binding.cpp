@@ -1,0 +1,440 @@
+#include "WarcraftXL/Binding.h"
+
+#include <cstddef>
+#include <cstdint>
+
+#include "Engine/Source/Tempest/C3Vector.h"
+#include "WoW/Source/Object/Container.h"
+#include "WoW/Source/Object/Corpse.h"
+#include "WoW/Source/Object/DynamicObject.h"
+#include "WoW/Source/Object/GameObject.h"
+#include "WoW/Source/Object/Item.h"
+#include "WoW/Source/Object/Object.h"
+#include "WoW/Source/Object/ObjectClient/Container_C.h"
+#include "WoW/Source/Object/ObjectClient/Corpse_C.h"
+#include "WoW/Source/Object/ObjectClient/DynamicObject_C.h"
+#include "WoW/Source/Object/ObjectClient/GameObject_C.h"
+#include "WoW/Source/Object/ObjectClient/Item_C.h"
+#include "WoW/Source/Object/ObjectClient/Object_C.h"
+#include "WoW/Source/Object/ObjectClient/Player_C.h"
+#include "WoW/Source/Object/ObjectClient/Types.h"
+#include "WoW/Source/Object/ObjectClient/Unit_C.h"
+#include "WoW/Source/Object/ObjectClient/VisibleItem_C.h"
+#include "WoW/Source/Object/Player.h"
+#include "WoW/Source/Object/Unit.h"
+#include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
+#include "WoW/Source/Ui/GameUI.h"
+#include "WoW/Source/WorldClient/MapArea.h"
+#include "WoW/Source/WorldClient/World.h"
+#include "wxl/events.h"
+
+// The contract numbers object types exactly as the client does, so a type id crosses as is.
+static_assert(ID_OBJECT == WXL_OBJECT_UNKNOWN && ID_ITEM == WXL_OBJECT_ITEM && ID_CONTAINER == WXL_OBJECT_CONTAINER
+                  && ID_UNIT == WXL_OBJECT_UNIT && ID_PLAYER == WXL_OBJECT_PLAYER && ID_GAMEOBJECT == WXL_OBJECT_GAMEOBJECT
+                  && ID_DYNAMICOBJECT == WXL_OBJECT_DYNAMIC && ID_CORPSE == WXL_OBJECT_CORPSE,
+              "wxl_object_type numbers the client's OBJECT_TYPE_ID");
+
+namespace {
+    // The runtime hands back the CGObject_C* a seam gave it, and asks a kind's rows only for an
+    // object of that kind, so each cast below is the one the client itself would make.
+    const CGObject_C* Object(const void* object) {
+        return static_cast<const CGObject_C*>(object);
+    }
+
+    const CGUnit_C* Unit(const void* object) {
+        return static_cast<const CGUnit_C*>(Object(object));
+    }
+
+    const CGPlayer_C* Player(const void* object) {
+        return static_cast<const CGPlayer_C*>(Object(object));
+    }
+
+    const CGItem_C* Item(const void* object) {
+        return static_cast<const CGItem_C*>(Object(object));
+    }
+
+    const CGContainer_C* Container(const void* object) {
+        return static_cast<const CGContainer_C*>(Object(object));
+    }
+
+    const CGGameObject_C* GameObject(const void* object) {
+        return static_cast<const CGGameObject_C*>(Object(object));
+    }
+
+    const CGDynamicObject_C* DynamicObject(const void* object) {
+        return static_cast<const CGDynamicObject_C*>(Object(object));
+    }
+
+    const CGCorpse_C* Corpse(const void* object) {
+        return static_cast<const CGCorpse_C*>(Object(object));
+    }
+
+    template <class T, size_t N>
+    constexpr uint32_t Extent(const T (&)[N]) {
+        return static_cast<uint32_t>(N);
+    }
+
+    wxl_bool Give(wxl_vec3* out, const C3Vector& v) {
+        out->x = v.x;
+        out->y = v.y;
+        out->z = v.z;
+        return WXL_TRUE;
+    }
+}
+
+namespace WarcraftXL::Binding {
+    // --- world.def ------------------------------------------------------------------------------
+
+    int32_t WXL_CALL map_id(void) {
+        return World::QueryMapId();
+    }
+
+    // --- objectmgr.def --------------------------------------------------------------------------
+
+    const void* WXL_CALL local_player_object(void) {
+        return ClntObjMgrGetActivePlayerObj();
+    }
+
+    // --- object.def -----------------------------------------------------------------------------
+
+    uint64_t WXL_CALL object_guid(const void* object) {
+        return Object(object)->m_obj->m_guid.m_guid;
+    }
+
+    uint32_t WXL_CALL object_entry(const void* object) {
+        return Object(object)->m_obj->m_entryID;
+    }
+
+    float WXL_CALL object_scale(const void* object) {
+        return Object(object)->m_obj->m_scale;
+    }
+
+    uint32_t WXL_CALL object_type_id(const void* object) {
+        return static_cast<uint32_t>(Object(object)->m_typeId);
+    }
+
+    wxl_bool WXL_CALL object_position(const void* object, wxl_vec3* out) {
+        const CGObject_C* o = Object(object);
+        switch (o->m_typeId) {
+            case ID_UNIT:
+            case ID_PLAYER:
+            case ID_GAMEOBJECT:
+            case ID_DYNAMICOBJECT:
+                return Give(out, o->GetPosition());
+            case ID_CORPSE:
+                // The fork declares no CGCorpse_C::GetPosition; the corpse's CPassenger holds it.
+                return Give(out, Corpse(object)->m_passenger.m_position);
+            default:
+                return WXL_FALSE;
+        }
+    }
+
+    wxl_bool WXL_CALL object_facing(const void* object, float* out) {
+        const CGObject_C* o = Object(object);
+        switch (o->m_typeId) {
+            case ID_UNIT:
+            case ID_PLAYER:
+            case ID_GAMEOBJECT:
+            case ID_DYNAMICOBJECT:
+            case ID_CORPSE:
+                *out = o->GetFacing();
+                return WXL_TRUE;
+            default:
+                return WXL_FALSE;
+        }
+    }
+
+    const char* WXL_CALL object_name(const void* object) {
+        const CGObject_C* o = Object(object);
+        switch (o->m_typeId) {
+            case ID_UNIT:
+            case ID_PLAYER:
+            case ID_GAMEOBJECT:
+            case ID_ITEM:
+            case ID_CONTAINER:
+                return o->GetObjectName();
+            default:
+                return nullptr;
+        }
+    }
+
+    // --- unit.def -------------------------------------------------------------------------------
+
+    uint32_t WXL_CALL unit_health(const void* object) {
+        return static_cast<uint32_t>(Unit(object)->m_unit->m_unitFieldHealth);
+    }
+
+    uint32_t WXL_CALL unit_max_health(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldMaxhealth;
+    }
+
+    uint32_t WXL_CALL unit_level(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldLevel;
+    }
+
+    uint64_t WXL_CALL unit_target(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldTarget.m_guid;
+    }
+
+    wxl_bool WXL_CALL unit_power(const void* object, uint32_t index, uint32_t* out) {
+        const CGUnitData* unit = Unit(object)->m_unit;
+        if (index >= Extent(unit->m_unitFieldPower)) {
+            return WXL_FALSE;
+        }
+        *out = unit->m_unitFieldPower[index];
+        return WXL_TRUE;
+    }
+
+    wxl_bool WXL_CALL unit_max_power(const void* object, uint32_t index, uint32_t* out) {
+        const CGUnitData* unit = Unit(object)->m_unit;
+        if (index >= Extent(unit->m_unitFieldMaxpower)) {
+            return WXL_FALSE;
+        }
+        *out = unit->m_unitFieldMaxpower[index];
+        return WXL_TRUE;
+    }
+
+    uint32_t WXL_CALL unit_bytes0(const void* object) {
+        const uint8_t* bytes = Unit(object)->m_unit->m_unitFieldBytes0;
+        return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8)
+            | (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
+    }
+
+    uint32_t WXL_CALL unit_display_id(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldDisplayid;
+    }
+
+    uint32_t WXL_CALL unit_native_display_id(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldNativedisplayid;
+    }
+
+    uint32_t WXL_CALL unit_mount_display_id(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldMountdisplayid;
+    }
+
+    uint32_t WXL_CALL unit_faction_template(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldFactiontemplate;
+    }
+
+    uint32_t WXL_CALL unit_flags(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldFlags;
+    }
+
+    uint32_t WXL_CALL unit_flags2(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldFlags2;
+    }
+
+    uint32_t WXL_CALL unit_dynamic_flags(const void* object) {
+        return Unit(object)->m_unit->m_unitDynamicFlags;
+    }
+
+    uint32_t WXL_CALL unit_npc_flags(const void* object) {
+        return Unit(object)->m_unit->m_unitNpcFlags;
+    }
+
+    float WXL_CALL unit_bounding_radius(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldBoundingradius;
+    }
+
+    float WXL_CALL unit_combat_reach(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldCombatreach;
+    }
+
+    uint64_t WXL_CALL unit_charm(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldCharm.m_guid;
+    }
+
+    uint64_t WXL_CALL unit_summon(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldSummon.m_guid;
+    }
+
+    uint64_t WXL_CALL unit_charmed_by(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldCharmedby.m_guid;
+    }
+
+    uint64_t WXL_CALL unit_summoned_by(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldSummonedby.m_guid;
+    }
+
+    uint64_t WXL_CALL unit_created_by(const void* object) {
+        return Unit(object)->m_unit->m_unitFieldCreatedby.m_guid;
+    }
+
+    // --- player.def -----------------------------------------------------------------------------
+
+    uint32_t WXL_CALL player_flags(const void* object) {
+        return Player(object)->m_player->m_playerFlags;
+    }
+
+    uint32_t WXL_CALL player_guild_id(const void* object) {
+        return Player(object)->m_player->m_playerGuildid;
+    }
+
+    uint32_t WXL_CALL player_guild_rank(const void* object) {
+        return Player(object)->m_player->m_playerGuildrank;
+    }
+
+    uint32_t WXL_CALL player_chosen_title(const void* object) {
+        return Player(object)->m_player->m_playerChosenTitle;
+    }
+
+    wxl_bool WXL_CALL player_visible_item_id(const void* object, uint32_t index, int32_t* out) {
+        const CGPlayerData* player = Player(object)->m_player;
+        if (index >= Extent(player->m_playerVisibleItems)) {
+            return WXL_FALSE;
+        }
+        *out = player->m_playerVisibleItems[index].m_itemId;
+        return WXL_TRUE;
+    }
+
+    int32_t WXL_CALL visible_item_id(const void* object) {
+        return static_cast<const VisibleItem_C*>(object)->m_itemId;
+    }
+
+    // --- item.def -------------------------------------------------------------------------------
+
+    uint64_t WXL_CALL item_owner(const void* object) {
+        return Item(object)->m_item->m_itemFieldOwner.m_guid;
+    }
+
+    uint64_t WXL_CALL item_contained_in(const void* object) {
+        return Item(object)->m_item->m_itemFieldContained.m_guid;
+    }
+
+    uint64_t WXL_CALL item_creator(const void* object) {
+        return Item(object)->m_item->m_itemFieldCreator.m_guid;
+    }
+
+    uint32_t WXL_CALL item_stack_count(const void* object) {
+        return static_cast<uint32_t>(Item(object)->m_item->m_itemFieldStackCount);
+    }
+
+    uint32_t WXL_CALL item_duration(const void* object) {
+        return Item(object)->m_item->m_itemFieldDuration;
+    }
+
+    uint32_t WXL_CALL item_flags(const void* object) {
+        return Item(object)->m_item->m_itemFieldFlags;
+    }
+
+    uint32_t WXL_CALL item_durability(const void* object) {
+        return Item(object)->m_item->m_itemFieldDurability;
+    }
+
+    uint32_t WXL_CALL item_max_durability(const void* object) {
+        return Item(object)->m_item->m_itemFieldMaxdurability;
+    }
+
+    // --- container.def --------------------------------------------------------------------------
+
+    uint32_t WXL_CALL container_num_slots(const void* object) {
+        return Container(object)->m_container->m_containerFieldNumSlots;
+    }
+
+    wxl_bool WXL_CALL container_slot(const void* object, uint32_t index, uint64_t* out) {
+        const CGContainerData* container = Container(object)->m_container;
+        if (index >= Extent(container->m_containerFieldSlot1)) {
+            return WXL_FALSE;
+        }
+        *out = container->m_containerFieldSlot1[index].m_guid;
+        return WXL_TRUE;
+    }
+
+    // --- gameobject.def -------------------------------------------------------------------------
+
+    uint64_t WXL_CALL gameobject_created_by(const void* object) {
+        return GameObject(object)->m_gameObject->m_createdBy.m_guid;
+    }
+
+    uint32_t WXL_CALL gameobject_display_id(const void* object) {
+        return GameObject(object)->m_gameObject->m_displayID;
+    }
+
+    uint32_t WXL_CALL gameobject_flags(const void* object) {
+        return GameObject(object)->m_gameObject->m_flags;
+    }
+
+    uint16_t WXL_CALL gameobject_dynamic_flags(const void* object) {
+        return GameObject(object)->m_gameObject->m_dynamicFlags;
+    }
+
+    uint32_t WXL_CALL gameobject_faction(const void* object) {
+        return GameObject(object)->m_gameObject->m_faction;
+    }
+
+    uint32_t WXL_CALL gameobject_level(const void* object) {
+        return GameObject(object)->m_gameObject->m_level;
+    }
+
+    int8_t WXL_CALL gameobject_state(const void* object) {
+        return GameObject(object)->m_gameObject->m_state;
+    }
+
+    int8_t WXL_CALL gameobject_type_id(const void* object) {
+        return GameObject(object)->m_gameObject->m_typeID;
+    }
+
+    int8_t WXL_CALL gameobject_art_kit(const void* object) {
+        return GameObject(object)->m_gameObject->m_artKit;
+    }
+
+    // --- dynamicobject.def ----------------------------------------------------------------------
+
+    uint64_t WXL_CALL dynamic_caster(const void* object) {
+        return DynamicObject(object)->m_dynamicObject->m_caster.m_guid;
+    }
+
+    uint32_t WXL_CALL dynamic_spell_id(const void* object) {
+        return DynamicObject(object)->m_dynamicObject->m_spellID;
+    }
+
+    float WXL_CALL dynamic_radius(const void* object) {
+        return DynamicObject(object)->m_dynamicObject->m_radius;
+    }
+
+    uint32_t WXL_CALL dynamic_cast_time(const void* object) {
+        return DynamicObject(object)->m_dynamicObject->m_castTime;
+    }
+
+    // --- corpse.def -----------------------------------------------------------------------------
+
+    uint64_t WXL_CALL corpse_owner(const void* object) {
+        return Corpse(object)->m_corpse->m_corpseFieldOwner.m_guid;
+    }
+
+    uint64_t WXL_CALL corpse_party(const void* object) {
+        return Corpse(object)->m_corpse->m_corpseFieldParty.m_guid;
+    }
+
+    uint32_t WXL_CALL corpse_display_id(const void* object) {
+        return Corpse(object)->m_corpse->m_corpseFieldDisplayId;
+    }
+
+    uint32_t WXL_CALL corpse_guild(const void* object) {
+        return Corpse(object)->m_corpse->m_corpseFieldGuild;
+    }
+
+    uint32_t WXL_CALL corpse_flags(const void* object) {
+        return Corpse(object)->m_corpse->m_corpseFieldFlags;
+    }
+
+    uint32_t WXL_CALL corpse_dynamic_flags(const void* object) {
+        return Corpse(object)->m_corpse->m_corpseFieldDynamicFlags;
+    }
+
+    // --- gameui.def -----------------------------------------------------------------------------
+
+    uint64_t WXL_CALL ui_target_guid(void) {
+        return CGGameUI::m_lockedTarget.m_guid;
+    }
+
+    // --- maparea.def ----------------------------------------------------------------------------
+
+    int32_t WXL_CALL map_area_tile_x(const void* object) {
+        return static_cast<const CMapArea*>(object)->m_index.x;
+    }
+
+    int32_t WXL_CALL map_area_tile_y(const void* object) {
+        return static_cast<const CMapArea*>(object)->m_index.y;
+    }
+}

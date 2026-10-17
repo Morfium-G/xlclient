@@ -1,16 +1,3 @@
-// The seams, for the client functions that call them.
-//
-// A seam is a Before and an After the runtime defines for one client function, declared once in
-// core's seam table (wxl/seams/seams.def) and called from inside that function:
-//
-//     void World::Preload(const C3Vector& position, int32_t showLoading) {
-//         wxl::seam::World::Preload::Before(WarcraftXL::Vec3(position), showLoading);
-//         ...
-//         wxl::seam::World::Preload::After(WarcraftXL::Vec3(position), showLoading);
-//     }
-//
-// The parameters cross a C boundary: a reference is a pointer, a client class is its SDK struct.
-// The adapters below make that conversion at the call.
 #pragma once
 
 #include <cstddef>
@@ -23,15 +10,22 @@
 
 #else
 
-// Win32 carries no runtime: the same table, expanded to functions that do nothing, so the calls
-// in the client's source compile unchanged.
+// Win32 carries no runtime: every seam call compiles to nothing. Before and After are function
+// objects that take anything, so a call site reads the same on both architectures.
 #include "wxl/abi.h"
 
 namespace wxl::seam {
-#define WXL_SEAM(domain, name, symbol, params)  \
-    namespace domain::name {                    \
-        inline void Before params {}            \
-        inline void After params {}             \
+    namespace detail {
+        struct Nop {
+            template <class... T>
+            void operator()(T&&...) const {}
+        };
+    }
+
+#define WXL_SEAM(domain, name, symbol, ret, conv, params) \
+    namespace domain::name {                              \
+        inline constexpr ::wxl::seam::detail::Nop Before{}; \
+        inline constexpr ::wxl::seam::detail::Nop After{};  \
     }
 #include "wxl/seams/seams.def"
 #undef WXL_SEAM
