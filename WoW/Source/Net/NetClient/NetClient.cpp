@@ -400,6 +400,8 @@ int32_t NetClient::HandleData(uint32_t timeReceived, void* data, int32_t size) {
 // VERIFY: 72928567 auto
 // OFFSET: 0x00632510
 int32_t NetClient::HandleConnect() {
+    wxl::seam::NetClient::HandleConnect::Before(this);
+
     if (this->m_objMgr) {
         NetClient::PushObjMgr(this->m_objMgr);
     }
@@ -407,12 +409,15 @@ int32_t NetClient::HandleConnect() {
     this->m_netState = NS_CONNECTED;
     NetClient::PopObjMgr();
 
+    wxl::seam::NetClient::HandleConnect::After(1, this);
     return 1;
 }
 
 // VERIFY: df419859 auto
 // OFFSET: 0x00632540
 int32_t NetClient::HandleDisconnect() {
+    wxl::seam::NetClient::HandleDisconnect::Before(this);
+
     if (this->m_objMgr) {
         NetClient::PushObjMgr(this->m_objMgr);
     }
@@ -422,6 +427,7 @@ int32_t NetClient::HandleDisconnect() {
     CGlueMgr::NetDisconnectHandler(this);
     NetClient::PopObjMgr();
 
+    wxl::seam::NetClient::HandleDisconnect::After(1, this);
     return 1;
 }
 

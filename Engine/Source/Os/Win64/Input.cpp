@@ -7,6 +7,7 @@
 #include "Engine/Source/Event/Types.h"
 #include "Engine/Source/Os/Gui.h"
 #include "Engine/Source/Os/Input.h"
+#include "WarcraftXL/Seams.h"
 #include "Engine/Source/Os/Joystick.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
@@ -1324,6 +1325,11 @@ int32_t OsGetDefaultWindowRect(tagRECT* rect) {
 
 // OFFSET: 0x0086A210
 intptr_t OsWindowProc(void* window, uint32_t message, uintptr_t wparam, intptr_t lparam) {
+    intptr_t gated = 0;
+    if (wxl::seam::Input::WindowProc::Gate(&gated, &window, &message, &wparam, &lparam)) {
+        return gated;
+    }
+
     HWND hwnd = static_cast<HWND>(window);
     UINT_PTR timer = 0;
 

@@ -18,6 +18,7 @@
 #include "Engine/Source/BlizzardCore/Source/System/Thread/Thread.h"
 #include "Engine/Source/BlizzardCore/Source/Packages/Util/Hash.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "WarcraftXL/Seams.h"
 #include "Engine/Source/Storm/Source/MD5.h"
 
 // STATIC: 0x00B32038
@@ -1027,6 +1028,13 @@ int32_t STORMAPI SFile::FileExistsEx(const char* name, uint32_t flags) {
 // VERIFY: 8c71c618 manual
 // OFFSET: 0x00424B50
 int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t flags, SFileImpl** result) {
+    int32_t gated = 0;
+    void* wxlArchive = archive;
+    void** wxlResult = reinterpret_cast<void**>(result);
+    if (wxl::seam::Storage::OpenFile::Gate(&gated, &wxlArchive, &name, &flags, &wxlResult)) {
+        return gated;
+    }
+
     Blizzard::File::SetLastErrorStack(nullptr);
 
     if (CheckIfStreamingAndTrial() && System_SFile2::s_soundCacheArchive && Blizzard::String::FindI(name, ".wav", 0x7FFFFFFF)) {
