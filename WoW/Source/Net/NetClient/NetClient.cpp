@@ -10,6 +10,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "WoW/Source/Glue/CGlueMgr.h"
 #include "WoW/Source/WowServices/HMAC.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00AD2ED0
 static TSList<NETCLIENTNODE> s_clientList;
@@ -271,6 +272,13 @@ void NetClient::ResetHandler(NETMESSAGE msgId) {
 // VERIFY: 59f00590 auto
 // OFFSET: 0x00631FE0
 int32_t NetClient::ProcessMessage(uint32_t timeReceived, CDataStore* msg, int32_t unused_a4) {
+    void* self = this;
+    void* message = msg;
+    int32_t gated = 0;
+    if (wxl::seam::NetClient::ProcessMessage::Gate(&gated, &self, &timeReceived, &message, &unused_a4)) {
+        return gated;
+    }
+
     s_stats[4]++;
 
     uint16_t msgId;
@@ -574,6 +582,12 @@ NetClient::NetClient() {
 // VERIFY: 3e4c9045 manual
 // OFFSET: 0x00632B50
 void NetClient::Send(CDataStore* msg) {
+    void* self = this;
+    void* message = msg;
+    if (wxl::seam::NetClient::Send::Gate(&self, &message)) {
+        return;
+    }
+
     if (this->m_netState != NS_CONNECTED) {
         return;
     }

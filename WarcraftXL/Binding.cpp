@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/FrameScript/FrameScript.h"
 #include "Engine/Source/Tempest/C3Vector.h"
 #include "Engine/Source/lua-5.1/src/lua.h"
@@ -556,5 +557,19 @@ namespace WarcraftXL::Binding {
 
     void WXL_CALL script_signal_event(uint32_t index, void* state, int32_t arg_count) {
         FrameScript_SignalEvent(index, State(state), arg_count);
+    }
+
+    // The NetClient rows read the message a seam was handed, and never move its read cursor:
+    // that cursor is where the client's own parsing starts.
+    const void* WXL_CALL message_data(const void* message) {
+        return message ? static_cast<const CDataStore*>(message)->m_data : nullptr;
+    }
+
+    uint32_t WXL_CALL message_size(const void* message) {
+        return message ? static_cast<const CDataStore*>(message)->m_size : 0u;
+    }
+
+    uint32_t WXL_CALL message_read(const void* message) {
+        return message ? static_cast<const CDataStore*>(message)->m_read : 0u;
     }
 }

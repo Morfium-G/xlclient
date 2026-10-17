@@ -20,6 +20,15 @@ namespace wxl::seam {
             template <class... T>
             void operator()(T&&...) const {}
         };
+
+        // A gated seam's Gate never takes the call, so a Win32 call site reads the same and
+        // behaves as if no seam were there.
+        struct NopGate {
+            template <class... T>
+            bool operator()(T...) const {
+                return false;
+            }
+        };
     }
 
 #define WXL_SEAM(domain, name, symbol, ret, conv, params) \
@@ -27,7 +36,12 @@ namespace wxl::seam {
         inline constexpr ::wxl::seam::detail::Nop Before{}; \
         inline constexpr ::wxl::seam::detail::Nop After{};  \
     }
+#define WXL_SEAM_GATE(domain, name, symbol, ret, conv, params) \
+    namespace domain::name {                                   \
+        inline constexpr ::wxl::seam::detail::NopGate Gate{};  \
+    }
 #include "wxl/seams/seams.def"
+#undef WXL_SEAM_GATE
 #undef WXL_SEAM
 }
 
