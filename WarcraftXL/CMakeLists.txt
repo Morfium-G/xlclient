@@ -24,8 +24,35 @@ foreach (dir WXL_CORE_DIR WXL_SDK_DIR)
     endif ()
 endforeach ()
 
+# --- The wiring check ------------------------------------------------------------------------
+# A seam's x64 half is two calls inside an upstream function, and this fork keeps pulling from
+# upstream. check_seams.py compares the seam table with this tree's sources and fails when a call
+# is missing, is in the wrong function, or carries the wrong arguments. Hung off WorldClient,
+# which every executable here builds, so no build can miss it. Both architectures: the calls are
+# in the source whether or not this configuration compiles them to anything.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_Interpreter_FOUND)
+    add_custom_target(wxl-seam-check
+        COMMAND "${Python3_EXECUTABLE}" "${WXL_CORE_DIR}/tools/seams/check_seams.py"
+                --seams "${WXL_CORE_DIR}/include/wxl/seams"
+                --client "${CMAKE_SOURCE_DIR}"
+        COMMENT "Checking the seam table against the fork's call sites"
+        VERBATIM)
+    add_dependencies(WorldClient wxl-seam-check)
+else ()
+    message(WARNING "Python 3 was not found, so the seam wiring check will not run in this build. "
+        "A dropped seam call site would go unnoticed; run core/tools/seams/check_seams.py by hand.")
+endif ()
+
+# The libraries whose sources carry seam calls. WorldClient holds the World seams, Event the
+# scheduler's. A library added here needs nothing else: the calls are declared by Seams.h, which
+# these include directories make reachable.
+set(WXL_SEAM_LIBRARIES WorldClient Event)
+
 if (NOT WOWDECOMP_ARCH_64)
-    target_include_directories(WorldClient PRIVATE "${WXL_CORE_DIR}/include" "${WXL_SDK_DIR}/include")
+    foreach (target ${WXL_SEAM_LIBRARIES})
+        target_include_directories(${target} PRIVATE "${WXL_CORE_DIR}/include" "${WXL_SDK_DIR}/include")
+    endforeach ()
     return()
 endif ()
 
@@ -72,7 +99,16 @@ target_include_directories(WarcraftXLClient SYSTEM PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(WarcraftXLClient PUBLIC wxl-core)
 target_compile_options(WarcraftXLClient PRIVATE /W4 /permissive- /external:W0)
 
+# Each seam-carrying library links the runtime for the Before and After it calls. WorldClient
+# takes the whole client-side library, which also carries the accessors; the others need only the
+# seams, so they link the DLL directly and no dependency cycle can form through Init.cpp.
 target_link_libraries(WorldClient PRIVATE WarcraftXLClient)
+foreach (target ${WXL_SEAM_LIBRARIES})
+    if (NOT target STREQUAL "WorldClient")
+        target_include_directories(${target} PRIVATE "${WXL_CORE_DIR}/include" "${WXL_SDK_DIR}/include")
+        target_link_libraries(${target} PRIVATE wxl-core)
+    endif ()
+endforeach ()
 foreach (target Wow WowClient)
     if (TARGET ${target})
         target_link_libraries(${target} PRIVATE WarcraftXLClient)

@@ -13,6 +13,7 @@
 #include "Engine/Source/Os/System.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "WarcraftXL/Seams.h"
 
 namespace Event {
     // STATIC: 0x00AC0DC0
@@ -121,6 +122,7 @@ int32_t SynthesizeInitialize(EvtContext* context) {
 // VERIFY: b9c7171f manual
 // OFFSET: 0x0047DB70
 void IEvtDispatchUpdate(EvtContext* context, uint32_t currTime, float elapsedSec) {
+    wxl::seam::Event::DispatchUpdate::Before(context, currTime, elapsedSec);
     context->m_critsect.Enter();
     int32_t closed = context->m_schedState == SCHEDSTATE_CLOSED;
     context->m_critsect.Leave();
@@ -132,6 +134,7 @@ void IEvtDispatchUpdate(EvtContext* context, uint32_t currTime, float elapsedSec
 
         IEvtQueueDispatch(context, EVENT_ID_UPDATE, &data);
     }
+    wxl::seam::Event::DispatchUpdate::After(context, currTime, elapsedSec);
 }
 
 // VERIFY: 8e0d29f6 manual
