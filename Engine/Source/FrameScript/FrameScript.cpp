@@ -3,6 +3,7 @@
 #include <cstring>
 #include <malloc.h>
 #include "Engine/Source/FrameScript/FrameScript.h"
+#include "WarcraftXL/Seams.h"
 #include "Engine/Source/FrameScript/FrameScript_Object.h"
 #include "Engine/Source/Base/Status.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
@@ -1132,6 +1133,7 @@ static int32_t FrameScript_HandleError(lua_State* L) {
 // VERIFY: 6d24b23a auto
 // OFFSET: 0x00819BB0
 int32_t FrameScript_Initialize(int32_t profile) {
+    wxl::seam::FrameScript::Initialize::Before(profile);
     s_mempool = luaM_initPool();
     s_context = lua_newstate(luaM_reallocPool, s_mempool, profile);
     s_scriptTimeUsed = 0;
@@ -1163,6 +1165,7 @@ int32_t FrameScript_Initialize(int32_t profile) {
 
     FrameScript_Execute(s_compatLua, "compat.lua", nullptr);
 
+    wxl::seam::FrameScript::Initialize::After(1, profile);
     return 1;
 }
 
@@ -1434,12 +1437,14 @@ void FrameScript_UnregisterScriptEvent(FrameScript_Object* object, FrameScript_E
 // VERIFY: 29317daf manual
 // OFFSET: 0x0081A9A0
 void FrameScript_Destroy() {
+    wxl::seam::FrameScript::Destroy::Before();
     lua_close(s_context);
     s_context = nullptr;
     luaM_freePool(s_mempool);
     s_mempool = nullptr;
     s_scriptEventsHash.Clear();
     s_scriptEvents.Clear();
+    wxl::seam::FrameScript::Destroy::After();
 }
 
 // VERIFY: 8009da99 manual
@@ -1607,6 +1612,7 @@ void FrameScript_SignalEvent(uint32_t index, const char* format, ...) {
 // VERIFY: 2207d978 manual
 // OFFSET: 0x0081B5F0
 void FrameScript_CreateEvents(const char** names, uint32_t count) {
+    wxl::seam::FrameScript::CreateEvents::Before(names, count);
     s_scriptEvents.SetCount(count);
 
     for (uint32_t i = 0; i < count; i++) {
@@ -1622,4 +1628,5 @@ void FrameScript_CreateEvents(const char** names, uint32_t count) {
             s_scriptEvents[i] = nullptr;
         }
     }
+    wxl::seam::FrameScript::CreateEvents::After(names, count);
 }

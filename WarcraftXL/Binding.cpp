@@ -3,7 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "Engine/Source/FrameScript/FrameScript.h"
 #include "Engine/Source/Tempest/C3Vector.h"
+#include "Engine/Source/lua-5.1/src/lua.h"
 #include "WoW/Source/Object/Container.h"
 #include "WoW/Source/Object/Corpse.h"
 #include "WoW/Source/Object/DynamicObject.h"
@@ -27,6 +29,7 @@
 #include "WoW/Source/WorldClient/MapArea.h"
 #include "WoW/Source/WorldClient/World.h"
 #include "wxl/events.h"
+#include "wxl/services/script.h"
 
 // The contract numbers object types exactly as the client does, so a type id crosses as is.
 static_assert(ID_OBJECT == WXL_OBJECT_UNKNOWN && ID_ITEM == WXL_OBJECT_ITEM && ID_CONTAINER == WXL_OBJECT_CONTAINER
@@ -79,6 +82,10 @@ namespace {
         out->y = v.y;
         out->z = v.z;
         return WXL_TRUE;
+    }
+
+    lua_State* State(void* state) {
+        return static_cast<lua_State*>(state);
     }
 }
 
@@ -428,6 +435,14 @@ namespace WarcraftXL::Binding {
         return CGGameUI::m_lockedTarget.m_guid;
     }
 
+    int32_t WXL_CALL ui_initialized(void) {
+        return CGGameUI::m_initialized;
+    }
+
+    uint8_t WXL_CALL ui_logging_in(void) {
+        return CGGameUI::m_loggingIn;
+    }
+
     // --- maparea.def ----------------------------------------------------------------------------
 
     int32_t WXL_CALL map_area_tile_x(const void* object) {
@@ -436,5 +451,110 @@ namespace WarcraftXL::Binding {
 
     int32_t WXL_CALL map_area_tile_y(const void* object) {
         return static_cast<const CMapArea*>(object)->m_index.y;
+    }
+
+    // --- script.def -----------------------------------------------------------------------------
+
+    void* WXL_CALL script_state(void) {
+        return FrameScript_GetContext();
+    }
+
+    wxl_bool WXL_CALL script_global_is_set(void* state, const char* name) {
+        lua_State* L = State(state);
+        lua_getfield(L, LUA_GLOBALSINDEX, name);
+        const int type = lua_type(L, -1);
+        lua_pop(L, 1);
+        return type > LUA_TNIL ? WXL_TRUE : WXL_FALSE;
+    }
+
+    void WXL_CALL script_set_global_closure(void* state, const char* name, wxl_script_native_fn fn, uint32_t slot) {
+        lua_State* L = State(state);
+        lua_pushnumber(L, static_cast<lua_Number>(slot));
+        lua_pushcclosure(L, reinterpret_cast<lua_CFunction>(fn), 1);
+        lua_setfield(L, LUA_GLOBALSINDEX, name);
+    }
+
+    void WXL_CALL script_clear_global(void* state, const char* name) {
+        lua_State* L = State(state);
+        lua_pushnil(L);
+        lua_setfield(L, LUA_GLOBALSINDEX, name);
+    }
+
+    uint32_t WXL_CALL script_closure_slot(void* state) {
+        return static_cast<uint32_t>(lua_tonumber(State(state), lua_upvalueindex(1)));
+    }
+
+    int32_t WXL_CALL script_top(void* state) {
+        return lua_gettop(State(state));
+    }
+
+    uint32_t WXL_CALL script_value_type(void* state, int32_t index) {
+        switch (lua_type(State(state), index)) {
+            case LUA_TNUMBER:
+                return WXL_VALUE_NUMBER;
+            case LUA_TSTRING:
+                return WXL_VALUE_STRING;
+            case LUA_TBOOLEAN:
+                return WXL_VALUE_BOOL;
+            default:
+                return WXL_VALUE_NIL;
+        }
+    }
+
+    double WXL_CALL script_to_number(void* state, int32_t index) {
+        return lua_tonumber(State(state), index);
+    }
+
+    const char* WXL_CALL script_to_string(void* state, int32_t index, uint32_t* length) {
+        size_t size = 0;
+        const char* text = lua_tolstring(State(state), index, &size);
+        if (length) {
+            *length = static_cast<uint32_t>(size);
+        }
+        return text;
+    }
+
+    wxl_bool WXL_CALL script_to_bool(void* state, int32_t index) {
+        return lua_toboolean(State(state), index) ? WXL_TRUE : WXL_FALSE;
+    }
+
+    void WXL_CALL script_push_number(void* state, double value) {
+        lua_pushnumber(State(state), value);
+    }
+
+    void WXL_CALL script_push_string(void* state, const char* text, uint32_t length) {
+        lua_pushlstring(State(state), text ? text : "", text ? length : 0u);
+    }
+
+    void WXL_CALL script_push_bool(void* state, wxl_bool value) {
+        lua_pushboolean(State(state), value ? 1 : 0);
+    }
+
+    void WXL_CALL script_push_nil(void* state) {
+        lua_pushnil(State(state));
+    }
+
+    void WXL_CALL script_pop(void* state, int32_t count) {
+        if (count > 0) {
+            lua_pop(State(state), count);
+        }
+    }
+
+    void WXL_CALL script_error(void* state, const char* message) {
+        lua_State* L = State(state);
+        lua_pushstring(L, message ? message : "WarcraftXL: error");
+        lua_error(L);
+    }
+
+    void WXL_CALL script_run(const char* source, const char* name) {
+        FrameScript_Execute(source, name, nullptr);
+    }
+
+    void WXL_CALL script_create_events(const char** names, uint32_t count) {
+        FrameScript_CreateEvents(names, count);
+    }
+
+    void WXL_CALL script_signal_event(uint32_t index, void* state, int32_t arg_count) {
+        FrameScript_SignalEvent(index, State(state), arg_count);
     }
 }

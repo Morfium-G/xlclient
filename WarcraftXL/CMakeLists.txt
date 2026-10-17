@@ -46,9 +46,9 @@ endif ()
 
 # The libraries whose sources carry seam calls. WorldClient holds the World and MapArea seams,
 # Event the scheduler's, ObjectMgrClient the object manager's, Object the unit's and the
-# player's, Ui the game interface's. A library added here needs nothing else: the calls are
-# declared by Seams.h, which these include directories make reachable.
-set(WXL_SEAM_LIBRARIES WorldClient Event ObjectMgrClient Object Ui)
+# player's, Ui the game interface's, FrameScript the script context's. A library added here needs
+# nothing else: the calls are declared by Seams.h, which these include directories make reachable.
+set(WXL_SEAM_LIBRARIES WorldClient Event ObjectMgrClient Object Ui FrameScript)
 
 if (NOT WOWDECOMP_ARCH_64)
     foreach (target ${WXL_SEAM_LIBRARIES})
