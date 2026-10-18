@@ -50,11 +50,19 @@ endif ()
 # connection's, Os the window procedure's, BlizzardCore the file open's. A library added
 # here needs nothing else: the calls are declared by Seams.h,
 # which these include directories make reachable.
-set(WXL_SEAM_LIBRARIES WorldClient Event ObjectMgrClient Object Ui FrameScript Net Os BlizzardCore)
+set(WXL_SEAM_LIBRARIES WorldClient Event ObjectMgrClient Object Ui FrameScript Net Os BlizzardCore
+    SoundInterface)
+
+# The executables carry seam calls of their own: Client.cpp holds the one that takes the client
+# apart. On x64 they link WarcraftXLClient, whose include directories are PUBLIC; on Win32 there
+# is no such library, so they are given the directories directly.
+set(WXL_SEAM_EXECUTABLES Wow WowClient)
 
 if (NOT WOWDECOMP_ARCH_64)
-    foreach (target ${WXL_SEAM_LIBRARIES})
-        target_include_directories(${target} PRIVATE "${WXL_CORE_DIR}/include" "${WXL_SDK_DIR}/include")
+    foreach (target ${WXL_SEAM_LIBRARIES} ${WXL_SEAM_EXECUTABLES})
+        if (TARGET ${target})
+            target_include_directories(${target} PRIVATE "${WXL_CORE_DIR}/include" "${WXL_SDK_DIR}/include")
+        endif ()
     endforeach ()
     return()
 endif ()
@@ -113,7 +121,7 @@ foreach (target ${WXL_SEAM_LIBRARIES})
         target_link_libraries(${target} PRIVATE wxl-core)
     endif ()
 endforeach ()
-foreach (target Wow WowClient)
+foreach (target ${WXL_SEAM_EXECUTABLES})
     if (TARGET ${target})
         target_link_libraries(${target} PRIVATE WarcraftXLClient)
     endif ()

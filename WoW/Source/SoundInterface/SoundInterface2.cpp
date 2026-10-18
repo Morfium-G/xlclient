@@ -22,6 +22,7 @@
 #include "WoW/Source/Object/ObjectClient/Unit_C.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/SoundInterface/SoundInterface2.h"
+#include "WarcraftXL/Seams.h"
 #include "WoW/Source/SoundInterface/SoundInterface2AdvancedKitProperties.h"
 #include "WoW/Source/SoundInterface/SoundInterface2Internal.h"
 #include "WoW/Source/SoundInterface/SoundInterface2ZoneSounds.h"
@@ -665,6 +666,14 @@ void SI2::RegisterDeviceChangeHandler() {
 // VERIFY: 5c43095a manual
 // OFFSET: 0x004C6A40
 int32_t SI2::PlaySoundKit(int32_t soundKitId, const C3Vector* position, SE2SoundKitObject* object, SE2SoundKitProperties* properties, uint32_t advancedId, uint32_t* soundId, int32_t checkDistance, int32_t keepPlaying) {
+    int32_t gated = 0;
+    const void* wxlPosition = position;
+    void* wxlObject = object;
+    void* wxlProperties = properties;
+    if (wxl::seam::Sound::PlaySoundKit::Gate(&gated, &soundKitId, &wxlPosition, &wxlObject, &wxlProperties, &advancedId, &soundId, &checkDistance, &keepPlaying)) {
+        return gated;
+    }
+
     if (soundKitId <= 0) {
         return 5;
     }

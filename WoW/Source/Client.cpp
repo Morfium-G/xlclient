@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "Client.h"
+#include "WarcraftXL/Seams.h"
 #include "Engine/Source/Base/Base.h"
 #include "Engine/Source/Base/CmdLine.h"
 #include "Engine/Source/BlizzardCore/OggDecompress.h"
@@ -507,6 +508,8 @@ void ZoneDebugDestroy() {
 // VERIFY: a6d33d4d auto
 // OFFSET: 0x00402910
 static void WowClientDestroy() {
+    wxl::seam::Client::Destroy::Before();
+
     ValidateNameDestroy();
     DeclinedWordsDestroy();
     SpellVisualsShutdown();
@@ -533,6 +536,8 @@ static void WowClientDestroy() {
     ConsoleCommandUnregister("timingInfo");
     ClientDBShutdown();
     SysMsgShutdown();
+
+    wxl::seam::Client::Destroy::After();
 }
 
 // VERIFY: ebfeeaaf manual

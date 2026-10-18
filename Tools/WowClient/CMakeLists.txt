@@ -5,6 +5,9 @@ if (WOWDECOMP_ARCH_64)
     set(WOWCLIENT_OUTPUT_NAME WowClient64)
 else ()
     file(GLOB CLIENT_PLATFORM_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/WoW/Source/Win32/*.cpp")
+    # BotCheck.cpp sits under Win64/ and holds nothing 64-bit; the architecture-independent
+    # sources call into it, so the 32-bit configuration needs it too or it does not link.
+    list(APPEND CLIENT_PLATFORM_SOURCES "${CMAKE_SOURCE_DIR}/WoW/Source/Win64/BotCheck.cpp")
     set(WOWCLIENT_OUTPUT_NAME WowClient32)
 endif ()
 

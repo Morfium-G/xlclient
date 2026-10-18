@@ -4,6 +4,9 @@ if (WOWDECOMP_ARCH_64)
     file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS "Win64/*.cpp")
 else ()
     file(GLOB PLATFORM_SOURCES CONFIGURE_DEPENDS "Win32/*.cpp")
+    # BotCheck.cpp sits under Win64/ and holds nothing 64-bit. The architecture-independent
+    # sources call into it, so the 32-bit configuration needs it too or it does not link.
+    list(APPEND PLATFORM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/Win64/BotCheck.cpp")
 endif ()
 
 add_executable(Wow WIN32 ${PRIVATE_SOURCES} ${PLATFORM_SOURCES})

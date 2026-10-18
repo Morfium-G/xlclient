@@ -1,5 +1,3 @@
-#if defined(WOWDECOMP_ARCH_64)
-
 #include <winsock2.h>
 #include <windows.h>
 #include "WoW/Source/WowServices/BattlenetLogin.h"
@@ -70,5 +68,3 @@ uint32_t BattlenetApplication::Resolve(uint32_t token, const char* hostname) {
     client.Resolved(token, info);
     return 0;
 }
-
-#endif
