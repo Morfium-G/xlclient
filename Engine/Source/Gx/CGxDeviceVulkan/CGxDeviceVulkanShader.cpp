@@ -12,12 +12,14 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <unordered_set>  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Log.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Manifest.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Md5.hpp"
 #include "Engine/Source/Gx/CGxDevice/CGxShader.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Log.h"  // SXC:
 
 namespace {
     namespace manifest  = gxvk::vk::manifest;
@@ -127,11 +129,27 @@ namespace {
         return index < g_translatedCount ? &g_translated[index] : nullptr;
     }
 
+    // SXC: every shader object the engine created through this device and has not destroyed. The
+    // backend reads the bound shader at every draw (D3D9 only when the state changes), so a value in
+    // GxRs_VertexShader / GxRs_PixelShader that is not a live shader would fault here: seen 2026-10-18
+    // in Halls of Origination with two floats (620.3, 1.0) in the vertex shader slot. Such a value is
+    // drawn as the fixed function and reported once instead.
+    std::unordered_set<const CGxShader*> g_liveShaders;
+
     // The shader the engine set for a stage, created if it never was, or null for the fixed function.
-    Program* Bound(CGxDeviceVulkan* device, void* value) {
+    Program* Bound(CGxDeviceVulkan* device, void* value, const char* stage) {
         CGxShader* shader = static_cast<CGxShader*>(value);
 
         if (!shader) {
+            return nullptr;
+        }
+
+        // SXC: see g_liveShaders.
+        if (g_liveShaders.find(shader) == g_liveShaders.end()) {
+            char key[64];
+            SStrPrintf(key, sizeof(key), "gxvk-shader|%s", stage);
+            SXC::LogOnce(key, "vulkan: the %s shader render state holds 0x%016llX, which is not a live shader (drawn without it; reported once per stage)",
+                         stage, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(value)));
             return nullptr;
         }
 
@@ -148,6 +166,13 @@ namespace {
 // for a single permutation; several permutations are created when the engine first asks Valid().
 void CGxDeviceVulkan::ShaderCreate(CGxShader** shaders, EGxShTarget target, const char* path, const char* name, uint32_t permutations) {
     CGxDevice::ShaderCreate(shaders, target, path, name, permutations);
+
+    // SXC: see g_liveShaders.
+    for (uint32_t i = 0; i < permutations; i++) {
+        if (shaders[i]) {
+            g_liveShaders.insert(shaders[i]);
+        }
+    }
 
     if (permutations == 1 && !shaders[0]->m_loaded) {
         this->IShaderCreate(shaders[0]);
@@ -205,6 +230,7 @@ void CGxDeviceVulkan::ShaderDestroy(CGxShader*& shader) {
     if (shader->m_refCount == 1) {
         shader->m_apiSpecific = nullptr;
         shader->m_loaded = 0;
+        g_liveShaders.erase(shader);  // SXC: the base deletes it with this last reference
     }
 
     CGxDevice::ShaderDestroy(shader);
@@ -301,8 +327,8 @@ void CGxDeviceVulkan::IShaderConstantsFlush() {
 //
 // @return uint32 samplerMask : the texture stages the draw must resolve (bit s = GxRs_Texture0 + s)
 uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
-    const Program* vs = Bound(this, this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
-    const Program* ps = Bound(this, this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
+    const Program* vs = Bound(this, this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p, "vertex");  // SXC: stage names
+    const Program* ps = Bound(this, this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p, "pixel");
 
     const bool vsTranslated = vs && vs->record;
     const bool psTranslated = ps && ps->record;

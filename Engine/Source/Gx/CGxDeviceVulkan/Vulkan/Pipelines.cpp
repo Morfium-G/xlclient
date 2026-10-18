@@ -65,6 +65,12 @@ namespace gxvk::vk::pipelines
             Write(Error, "vulkan: pipelines: maxUniformBufferRange %u cannot hold a %u-byte slice; declining", props.limits.maxUniformBufferRange, kSliceBytesLarge);
             return false;
         }
+        // SXC: the push range grew past Vulkan's guaranteed 128 bytes for fixed-function fog.
+        if (props.limits.maxPushConstantsSize < kPushBytes)
+        {
+            Write(Error, "vulkan: pipelines: maxPushConstantsSize %u cannot hold the %u-byte push range; declining", props.limits.maxPushConstantsSize, kPushBytes);
+            return false;
+        }
 
         s.entries = new (std::nothrow) Entry[kMaxPipelines];
         if (!s.entries)
@@ -321,6 +327,7 @@ namespace gxvk::vk::pipelines
         std::memcpy(push, draw.xform, sizeof draw.xform);
         std::memcpy(push + 16, draw.params, sizeof draw.params);
         std::memcpy(push + 20, draw.tex, sizeof draw.tex);
+        std::memcpy(push + 32, draw.fog, sizeof draw.fog);  // SXC: fixed-function fog
         if (!b.pushed || std::memcmp(b.push, push, sizeof push) != 0)
         {
             d.CmdPushConstants(cmd, layout.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, kPushBytes, push);

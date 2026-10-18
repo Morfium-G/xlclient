@@ -15,6 +15,7 @@ layout(location = 3) in vec2 inTexCoord1;
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out vec2 vTexCoord0;
 layout(location = 2) out vec2 vTexCoord1;
+layout(location = 3) out float vFog;        // SXC: Ff.frag reads it; UI.bls writes no oFog: no fog
 
 void main()
 {
@@ -25,4 +26,5 @@ void main()
     vColor      = inColor;
     vTexCoord0  = inTexCoord0;
     vTexCoord1  = vec2(0.0);
+    vFog        = 1.0;
 }

@@ -218,6 +218,13 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
     pixelRows[15 * 4 + 1] = ((fogColour >> 8) & 0xFF) / 255.0f;
     pixelRows[15 * 4 + 2] = (fogColour & 0xFF) / 255.0f;
     pixelRows[15 * 4 + 3] = fogOn ? 1.0f : 0.0f;
+    // SXC: the same fog for the fixed-function programs (Shaders/Push.glsl's fog), which D3D9 applies
+    // as linear vertex fog (D3DRS_FOGVERTEXMODE LINEAR): the horizon's terrain and map objects rely on
+    // it to turn into the fog colour.
+    d.fog[0] = this->m_appRenderStates[GxRs_FogStart].m_value.m_data.f[0];
+    d.fog[1] = this->m_appRenderStates[GxRs_FogEnd].m_value.m_data.f[0];
+    d.fog[2] = static_cast<float>(fogColour & 0xFFFFFFu);
+    d.fog[3] = fogOn ? 1.0f : 0.0f;
     d.pixelRegs = pixelRows;
     d.vertexRegs = this->m_vertexRegs;
 

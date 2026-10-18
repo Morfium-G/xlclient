@@ -127,7 +127,11 @@ class Emitter(object):
                 idx = '%d + a0.%s' % (o.index, SWZ[comp])
             else:
                 raise Refused('relative addressing through register type %d' % rt)
-            return 'regs.v[%s]' % idx
+            # SXC: D3D9 resolves a relative read against the def'd literals as well (e.g.
+            # vsLiquidProcWater's `c58[aL]` walks the def'd basis c58..c60), so the read goes
+            # through dx_c(), which answers the literal where one is def'd and the window elsewhere.
+            self.helpers.add('cread')
+            return 'dx_c(%s)' % idx
         if o.index in self.defs:
             return 'c%d' % o.index
         self.cmax = max(self.cmax, o.index)
@@ -641,6 +645,21 @@ class Emitter(object):
                 P('float dx_pow(float x, float y) { return x == 0.0 ? 0.0 : exp2(y * log2(abs(x))); }')
             if 'nrm' in self.helpers:
                 P('vec4 dx_nrm(vec4 v) { return v * inversesqrt(dot(v.xyz, v.xyz)); }')
+            if 'cread' in self.helpers:
+                # SXC: a relative c# read, as D3D9 resolves it: a def'd literal where the index lands
+                # on one, the uniform window everywhere else.
+                if self.defs:
+                    P('vec4 dx_c(int i)')
+                    P('{')
+                    P('    switch (i)')
+                    P('    {')
+                    for idx in sorted(self.defs):
+                        P('    case %d: return c%d;' % (idx, idx))
+                    P('    }')
+                    P('    return regs.v[i];')
+                    P('}')
+                else:
+                    P('vec4 dx_c(int i) { return regs.v[i]; }')
         P('')
         P('void main()')
         P('{')

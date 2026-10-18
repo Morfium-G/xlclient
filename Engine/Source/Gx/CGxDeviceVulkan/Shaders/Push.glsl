@@ -13,12 +13,32 @@
 //           2x2 part in tex[s] as (a0, b0, a1, b1) and the translation in tex[2] (stage 0 in xy,
 //           stage 1 in zw), so u' = u * a0 + v * b0 + d0 and v' = u * a1 + v * b1 + d1. Identity
 //           when the stage has no transform.
+//   fog     SXC: D3D9's linear vertex fog for the fixed-function programs: x start, y end, z the fog
+//           colour's RGB as one integer (0xRRGGBB, exact in a float), w 1 when fog is on.
 layout(push_constant) uniform Push
 {
     mat4 xform;
     vec4 params;
     vec4 tex[3];
+    vec4 fog;
 } pc;
+
+// SXC: D3D9's linear fog factor for a vertex at view-space depth `depth` (the clip w of the
+// perspective projection): 1 = no fog, 0 = all fog. 1 when fog is off.
+float FogFactor(float depth)
+{
+    if (pc.fog.w < 0.5) return 1.0;
+    float range = pc.fog.y - pc.fog.x;
+    return range > 0.0 ? clamp((pc.fog.y - depth) / range, 0.0, 1.0) : (depth < pc.fog.x ? 1.0 : 0.0);
+}
+
+// SXC: blends a colour toward the fog colour by a factor from FogFactor().
+vec3 ApplyFog(vec3 colour, float factor)
+{
+    uint c = uint(pc.fog.z + 0.5);
+    vec3 fogColour = vec3(float((c >> 16u) & 255u), float((c >> 8u) & 255u), float(c & 255u)) / 255.0;
+    return mix(fogColour, colour, factor);
+}
 
 // The D3D clip space the engine's matrices produce has y up; Vulkan's has y down.
 vec4 ToVulkanClip(vec4 clip)

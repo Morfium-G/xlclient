@@ -139,6 +139,9 @@ namespace gxvk::vk::pipelines
         float xform[16] = {};
         float params[4] = {};
         float tex[12]   = { 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        /// SXC: D3D9's linear vertex fog for the fixed-function programs: GxRs_FogStart,
+        /// GxRs_FogEnd, GxRs_FogColor's RGB as one integer (exact in a float), 1 when on.
+        float fog[4]    = {};
 
         Texture  textures[kTextureStages];   ///< set where textureMask has the bit
         uint32_t textureMask = 0;
