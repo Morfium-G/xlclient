@@ -16,6 +16,13 @@ target_include_directories(SXC
         ${CMAKE_SOURCE_DIR}
 )
 
+# The build number the client sends to the login server, which compares it against the realm list
+# (tswow's gamebuild patch; tswow can set it per dataset).
+set(SXC_GAME_BUILD 12340 CACHE STRING "Build number sent to the login server (stock 12340)")
+if (TARGET WowServices)
+    target_compile_definitions(WowServices PRIVATE SXC_GAME_BUILD=${SXC_GAME_BUILD})
+endif ()
+
 # Every executable that links the engine libraries, which call into SXC (the root's list of
 # executables, including tools that exist only on some upstream branches).
 foreach (target Wow WowClient MapViewer M2Viewer GxTest MpqTest BlpTest DbcTest AssetCheck)
