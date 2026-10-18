@@ -19,6 +19,7 @@
 #include "WoW/Source/Ui/WorldFrame.h"
 #include "WoW/Source/WorldClient/FrameTime.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00CA1600
 static uint32_t s_nextVictimImpactTime;
@@ -735,6 +736,7 @@ void CGUnit_C::OnAttackStop(uint64_t target, int32_t faceTarget) {
 // VERIFY: 161e4292 manual
 // OFFSET: 0x00756800
 int32_t Packet_Group_29(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Combat::Packet_Group_29::Before(param, msgId, time, msg);
     switch (msgId) {
         case SMSG_ATTACK_START: {
             WOWGUID attacker;

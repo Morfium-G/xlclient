@@ -1543,6 +1543,7 @@ int32_t Packet_SMSG_PET_CAST_FAILED(void* param, NETMESSAGE msgId, uint32_t time
 // VERIFY: b5828213 manual
 // OFFSET: 0x00806DD0
 int32_t Packet_SMSG_SPELL_COOLDOWN(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_SMSG_SPELL_COOLDOWN::Before(param, msgId, time, msg);
     bool startRecovery = false;
     bool ignoreEvent = false;
     WOWGUID guid;
@@ -4411,6 +4412,7 @@ SpellHistory::~SpellHistory() {
 // VERIFY: 7c88da8e auto
 // OFFSET: 0x00804010
 int32_t Packet_Group_31(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_Group_31::Before(param, msgId, time, msg);
     uint32_t spellId;
     WOWGUID guid;
     msg->Get(spellId);
@@ -4994,6 +4996,7 @@ float Spell_C_GetSpellRadius() {
 // VERIFY: 780f5311 manual
 // OFFSET: 0x00801B80
 int32_t Packet_SMSG_SPELL_DELAYED(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_SMSG_SPELL_DELAYED::Before(param, msgId, time, msg);
     SmartGUID guid;
     *msg >> guid;
     int32_t delay;
@@ -5026,6 +5029,7 @@ int32_t Packet_SMSG_PET_TAME_FAILURE(void* param, NETMESSAGE msgId, uint32_t tim
 // VERIFY: ca8bfe75 manual
 // OFFSET: 0x008020C0
 int32_t Packet_SMSG_UNIT_SPELLCAST_START(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_SMSG_UNIT_SPELLCAST_START::Before(param, msgId, time, msg);
     SmartGUID caster;
     *msg >> caster;
     SmartGUID target;
@@ -5480,6 +5484,7 @@ PendingSpellCast* Spell_C_GetActivePlayerPendingCast() {
 // VERIFY: fd2d4d6a manual
 // OFFSET: 0x00806200
 void Spell_C_CancelSpell(PendingSpellCast* cast, bool stopRecast, bool notifyServer, int32_t reason) {
+    wxl::seam::Spell::CancelSpell::Before(cast, stopRecast, notifyServer, reason);
     SpellRec spell;
 
     if (!g_spellDB.GetRecord(cast->m_data.m_spellId, &spell)) {
@@ -5649,6 +5654,7 @@ int32_t Packet_SMSG_SPELL_FAILED_OTHER(void* param, NETMESSAGE msgId, uint32_t t
 // VERIFY: 29396807 manual
 // OFFSET: 0x00807060
 int32_t Packet_SMSG_ITEM_COOLDOWN(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_SMSG_ITEM_COOLDOWN::Before(param, msgId, time, msg);
     WOWGUID guid;
     msg->Get(guid.m_guid);
     uint32_t spellId;
@@ -9071,6 +9077,7 @@ void Spell_C_ClearPetCooldowns() {
 // VERIFY: b323a3a8 manual
 // OFFSET: 0x00801C90
 int32_t Packet_MSG_CHANNEL_START(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_MSG_CHANNEL_START::Before(param, msgId, time, msg);
     SmartGUID smartGuid;
     *msg >> smartGuid;
     WOWGUID guid = smartGuid;
@@ -9101,6 +9108,7 @@ int32_t Packet_MSG_CHANNEL_START(void* param, NETMESSAGE msgId, uint32_t time, C
 // VERIFY: e57ade70 manual
 // OFFSET: 0x00801DB0
 int32_t Packet_MSG_CHANNEL_UPDATE(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_MSG_CHANNEL_UPDATE::Before(param, msgId, time, msg);
     SmartGUID smartGuid;
     *msg >> smartGuid;
     WOWGUID guid = smartGuid;

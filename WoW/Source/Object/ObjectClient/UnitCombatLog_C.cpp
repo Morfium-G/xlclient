@@ -37,6 +37,7 @@
 #include "Engine/Source/Base/ConvertUTF.h"
 #include "WoW/Source/Object/CreatureStats.h"
 #include "WoW/Source/DB/Rec/SummonPropertiesRec.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ADB758
 static const char* s_combatLogEventNames[50] = {
@@ -1884,6 +1885,7 @@ void UnitCombatLogAuraAddedOrRemoved(CGUnit_C* unit, AuraData* aura, const Spell
 // VERIFY: db86f760 manual
 // OFFSET: 0x006D3090
 int32_t CombatLog::HandleSpellLogMiss(CDataStore* msg, int32_t timeOffset) {
+    wxl::seam::Combat::HandleSpellLogMiss::Before(msg, timeOffset);
     uint32_t spellId = 0;
     msg->Get(spellId);
     uint64_t value = 0;
@@ -1927,6 +1929,7 @@ int32_t CombatLog::HandleSpellLogMiss(CDataStore* msg, int32_t timeOffset) {
 // VERIFY: b28f2a2e manual
 // OFFSET: 0x006D3C30
 int32_t CombatLog::HandleSpellHealLog(CDataStore* msg, int32_t timeOffset) {
+    wxl::seam::Combat::HandleSpellHealLog::Before(msg, timeOffset);
     SmartGUID target;
     SmartGUID caster;
     *msg >> target;
@@ -2516,6 +2519,7 @@ int32_t CombatLog::HandleSpellRemoveLog(NETMESSAGE msgId, CDataStore* msg, int32
 // VERIFY: f5db08bc manual
 // OFFSET: 0x006D3840
 int32_t CombatLog::HandleSpellNonMeleeDamageLog(CDataStore* msg, int32_t timeOffset) {
+    wxl::seam::Combat::HandleSpellNonMeleeDamageLog::Before(msg, timeOffset);
     SmartGUID target;
     SmartGUID caster;
     *msg >> target;
@@ -2623,6 +2627,7 @@ int32_t CombatLog::HandleSpellNonMeleeDamageLog(CDataStore* msg, int32_t timeOff
 // VERIFY: f255adaa manual
 // OFFSET: 0x007531F0
 int32_t CombatLog::HandlePeriodicAuraLog(CDataStore* msg, int32_t timeOffset) {
+    wxl::seam::Combat::HandlePeriodicAuraLog::Before(msg, timeOffset);
     SmartGUID target;
     SmartGUID caster;
     *msg >> target;
