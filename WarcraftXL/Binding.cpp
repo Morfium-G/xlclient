@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <type_traits>
 
 #include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
@@ -49,30 +51,6 @@ namespace {
         return static_cast<const CGObject_C*>(object);
     }
 
-    const CGUnit_C* Unit(const void* object) {
-        return static_cast<const CGUnit_C*>(Object(object));
-    }
-
-    const CGPlayer_C* Player(const void* object) {
-        return static_cast<const CGPlayer_C*>(Object(object));
-    }
-
-    const CGItem_C* Item(const void* object) {
-        return static_cast<const CGItem_C*>(Object(object));
-    }
-
-    const CGContainer_C* Container(const void* object) {
-        return static_cast<const CGContainer_C*>(Object(object));
-    }
-
-    const CGGameObject_C* GameObject(const void* object) {
-        return static_cast<const CGGameObject_C*>(Object(object));
-    }
-
-    const CGDynamicObject_C* DynamicObject(const void* object) {
-        return static_cast<const CGDynamicObject_C*>(Object(object));
-    }
-
     const CGCorpse_C* Corpse(const void* object) {
         return static_cast<const CGCorpse_C*>(Object(object));
     }
@@ -92,9 +70,70 @@ namespace {
     lua_State* State(void* state) {
         return static_cast<lua_State*>(state);
     }
+
+    // A member as a binding row answers it: a guid as its 64 bits, a byte array as the integer it
+    // packs, anything else converted to the row's type.
+    template <class R, class V>
+    R Fact(const V& value) {
+        if constexpr (std::is_same_v<V, WOWGUID>) {
+            return value.m_guid;
+        } else if constexpr (std::is_array_v<V>) {
+            static_assert(sizeof(V) == sizeof(R), "a byte array answers an integer of its size");
+            R packed;
+            std::memcpy(&packed, &value, sizeof packed);
+            return packed;
+        } else {
+            return static_cast<R>(value);
+        }
+    }
 }
 
 namespace WarcraftXL::Binding {
+    // --- the field rows, generated from the table --------------------------------------------
+
+#define WXL_BINDING(name, ret, params, args, absent)
+
+#define WXL_BINDING_FIELD(name, ret, Type, member, absent)                                              \
+    ret WXL_CALL name(const void* object) {                                                             \
+        return object ? Fact<ret>(static_cast<const Type*>(object)->member) : static_cast<ret>(absent); \
+    }
+
+#define WXL_BINDING_FIELD_VIA(name, ret, Type, via, ViaType, member, absent)             \
+    ret WXL_CALL name(const void* object) {                                              \
+        const ViaType* block = object ? static_cast<const Type*>(object)->via : nullptr; \
+        return block ? Fact<ret>(block->member) : static_cast<ret>(absent);              \
+    }
+
+#define WXL_BINDING_FIELD_VIA_INDEX(name, ret, Type, via, ViaType, member)               \
+    wxl_bool WXL_CALL name(const void* object, uint32_t index, ret* out) {               \
+        const ViaType* block = object ? static_cast<const Type*>(object)->via : nullptr; \
+        if (!block || !out || index >= Extent(block->member)) {                          \
+            return WXL_FALSE;                                                            \
+        }                                                                                \
+        *out = Fact<ret>(block->member[index]);                                          \
+        return WXL_TRUE;                                                                 \
+    }
+
+#define WXL_BINDING_FIELD_VIA_AT(name, ret, Type, via, ViaType, member, Elem, elem_member) \
+    wxl_bool WXL_CALL name(const void* object, uint32_t index, ret* out) {                 \
+        const ViaType* block = object ? static_cast<const Type*>(object)->via : nullptr;   \
+        if (!block || !out || index >= Extent(block->member)) {                            \
+            return WXL_FALSE;                                                              \
+        }                                                                                  \
+        *out = Fact<ret>(block->member[index].elem_member);                                \
+        return WXL_TRUE;                                                                   \
+    }
+
+#include "wxl/core/binding.def"
+
+#undef WXL_BINDING
+#undef WXL_BINDING_FIELD
+#undef WXL_BINDING_FIELD_VIA
+#undef WXL_BINDING_FIELD_VIA_INDEX
+#undef WXL_BINDING_FIELD_VIA_AT
+
+    // --- the call rows, one body per WXL_BINDING row of the table ----------------------------
+
     // --- world.def ------------------------------------------------------------------------------
 
     int32_t WXL_CALL map_id(void) {
@@ -108,22 +147,6 @@ namespace WarcraftXL::Binding {
     }
 
     // --- object.def -----------------------------------------------------------------------------
-
-    uint64_t WXL_CALL object_guid(const void* object) {
-        return Object(object)->m_obj->m_guid.m_guid;
-    }
-
-    uint32_t WXL_CALL object_entry(const void* object) {
-        return Object(object)->m_obj->m_entryID;
-    }
-
-    float WXL_CALL object_scale(const void* object) {
-        return Object(object)->m_obj->m_scale;
-    }
-
-    uint32_t WXL_CALL object_type_id(const void* object) {
-        return static_cast<uint32_t>(Object(object)->m_typeId);
-    }
 
     wxl_bool WXL_CALL object_position(const void* object, wxl_vec3* out) {
         const CGObject_C* o = Object(object);
@@ -170,270 +193,6 @@ namespace WarcraftXL::Binding {
         }
     }
 
-    // --- unit.def -------------------------------------------------------------------------------
-
-    uint32_t WXL_CALL unit_health(const void* object) {
-        return static_cast<uint32_t>(Unit(object)->m_unit->m_unitFieldHealth);
-    }
-
-    uint32_t WXL_CALL unit_max_health(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldMaxhealth;
-    }
-
-    uint32_t WXL_CALL unit_level(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldLevel;
-    }
-
-    uint64_t WXL_CALL unit_target(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldTarget.m_guid;
-    }
-
-    wxl_bool WXL_CALL unit_power(const void* object, uint32_t index, uint32_t* out) {
-        const CGUnitData* unit = Unit(object)->m_unit;
-        if (index >= Extent(unit->m_unitFieldPower)) {
-            return WXL_FALSE;
-        }
-        *out = unit->m_unitFieldPower[index];
-        return WXL_TRUE;
-    }
-
-    wxl_bool WXL_CALL unit_max_power(const void* object, uint32_t index, uint32_t* out) {
-        const CGUnitData* unit = Unit(object)->m_unit;
-        if (index >= Extent(unit->m_unitFieldMaxpower)) {
-            return WXL_FALSE;
-        }
-        *out = unit->m_unitFieldMaxpower[index];
-        return WXL_TRUE;
-    }
-
-    uint32_t WXL_CALL unit_bytes0(const void* object) {
-        const uint8_t* bytes = Unit(object)->m_unit->m_unitFieldBytes0;
-        return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8)
-            | (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
-    }
-
-    uint32_t WXL_CALL unit_display_id(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldDisplayid;
-    }
-
-    uint32_t WXL_CALL unit_native_display_id(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldNativedisplayid;
-    }
-
-    uint32_t WXL_CALL unit_mount_display_id(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldMountdisplayid;
-    }
-
-    uint32_t WXL_CALL unit_faction_template(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldFactiontemplate;
-    }
-
-    uint32_t WXL_CALL unit_flags(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldFlags;
-    }
-
-    uint32_t WXL_CALL unit_flags2(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldFlags2;
-    }
-
-    uint32_t WXL_CALL unit_dynamic_flags(const void* object) {
-        return Unit(object)->m_unit->m_unitDynamicFlags;
-    }
-
-    uint32_t WXL_CALL unit_npc_flags(const void* object) {
-        return Unit(object)->m_unit->m_unitNpcFlags;
-    }
-
-    float WXL_CALL unit_bounding_radius(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldBoundingradius;
-    }
-
-    float WXL_CALL unit_combat_reach(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldCombatreach;
-    }
-
-    uint64_t WXL_CALL unit_charm(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldCharm.m_guid;
-    }
-
-    uint64_t WXL_CALL unit_summon(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldSummon.m_guid;
-    }
-
-    uint64_t WXL_CALL unit_charmed_by(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldCharmedby.m_guid;
-    }
-
-    uint64_t WXL_CALL unit_summoned_by(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldSummonedby.m_guid;
-    }
-
-    uint64_t WXL_CALL unit_created_by(const void* object) {
-        return Unit(object)->m_unit->m_unitFieldCreatedby.m_guid;
-    }
-
-    // --- player.def -----------------------------------------------------------------------------
-
-    uint32_t WXL_CALL player_flags(const void* object) {
-        return Player(object)->m_player->m_playerFlags;
-    }
-
-    uint32_t WXL_CALL player_guild_id(const void* object) {
-        return Player(object)->m_player->m_playerGuildid;
-    }
-
-    uint32_t WXL_CALL player_guild_rank(const void* object) {
-        return Player(object)->m_player->m_playerGuildrank;
-    }
-
-    uint32_t WXL_CALL player_chosen_title(const void* object) {
-        return Player(object)->m_player->m_playerChosenTitle;
-    }
-
-    wxl_bool WXL_CALL player_visible_item_id(const void* object, uint32_t index, int32_t* out) {
-        const CGPlayerData* player = Player(object)->m_player;
-        if (index >= Extent(player->m_playerVisibleItems)) {
-            return WXL_FALSE;
-        }
-        *out = player->m_playerVisibleItems[index].m_itemId;
-        return WXL_TRUE;
-    }
-
-    int32_t WXL_CALL visible_item_id(const void* object) {
-        return static_cast<const VisibleItem_C*>(object)->m_itemId;
-    }
-
-    // --- item.def -------------------------------------------------------------------------------
-
-    uint64_t WXL_CALL item_owner(const void* object) {
-        return Item(object)->m_item->m_itemFieldOwner.m_guid;
-    }
-
-    uint64_t WXL_CALL item_contained_in(const void* object) {
-        return Item(object)->m_item->m_itemFieldContained.m_guid;
-    }
-
-    uint64_t WXL_CALL item_creator(const void* object) {
-        return Item(object)->m_item->m_itemFieldCreator.m_guid;
-    }
-
-    uint32_t WXL_CALL item_stack_count(const void* object) {
-        return static_cast<uint32_t>(Item(object)->m_item->m_itemFieldStackCount);
-    }
-
-    uint32_t WXL_CALL item_duration(const void* object) {
-        return Item(object)->m_item->m_itemFieldDuration;
-    }
-
-    uint32_t WXL_CALL item_flags(const void* object) {
-        return Item(object)->m_item->m_itemFieldFlags;
-    }
-
-    uint32_t WXL_CALL item_durability(const void* object) {
-        return Item(object)->m_item->m_itemFieldDurability;
-    }
-
-    uint32_t WXL_CALL item_max_durability(const void* object) {
-        return Item(object)->m_item->m_itemFieldMaxdurability;
-    }
-
-    // --- container.def --------------------------------------------------------------------------
-
-    uint32_t WXL_CALL container_num_slots(const void* object) {
-        return Container(object)->m_container->m_containerFieldNumSlots;
-    }
-
-    wxl_bool WXL_CALL container_slot(const void* object, uint32_t index, uint64_t* out) {
-        const CGContainerData* container = Container(object)->m_container;
-        if (index >= Extent(container->m_containerFieldSlot1)) {
-            return WXL_FALSE;
-        }
-        *out = container->m_containerFieldSlot1[index].m_guid;
-        return WXL_TRUE;
-    }
-
-    // --- gameobject.def -------------------------------------------------------------------------
-
-    uint64_t WXL_CALL gameobject_created_by(const void* object) {
-        return GameObject(object)->m_gameObject->m_createdBy.m_guid;
-    }
-
-    uint32_t WXL_CALL gameobject_display_id(const void* object) {
-        return GameObject(object)->m_gameObject->m_displayID;
-    }
-
-    uint32_t WXL_CALL gameobject_flags(const void* object) {
-        return GameObject(object)->m_gameObject->m_flags;
-    }
-
-    uint16_t WXL_CALL gameobject_dynamic_flags(const void* object) {
-        return GameObject(object)->m_gameObject->m_dynamicFlags;
-    }
-
-    uint32_t WXL_CALL gameobject_faction(const void* object) {
-        return GameObject(object)->m_gameObject->m_faction;
-    }
-
-    uint32_t WXL_CALL gameobject_level(const void* object) {
-        return GameObject(object)->m_gameObject->m_level;
-    }
-
-    int8_t WXL_CALL gameobject_state(const void* object) {
-        return GameObject(object)->m_gameObject->m_state;
-    }
-
-    int8_t WXL_CALL gameobject_type_id(const void* object) {
-        return GameObject(object)->m_gameObject->m_typeID;
-    }
-
-    int8_t WXL_CALL gameobject_art_kit(const void* object) {
-        return GameObject(object)->m_gameObject->m_artKit;
-    }
-
-    // --- dynamicobject.def ----------------------------------------------------------------------
-
-    uint64_t WXL_CALL dynamic_caster(const void* object) {
-        return DynamicObject(object)->m_dynamicObject->m_caster.m_guid;
-    }
-
-    uint32_t WXL_CALL dynamic_spell_id(const void* object) {
-        return DynamicObject(object)->m_dynamicObject->m_spellID;
-    }
-
-    float WXL_CALL dynamic_radius(const void* object) {
-        return DynamicObject(object)->m_dynamicObject->m_radius;
-    }
-
-    uint32_t WXL_CALL dynamic_cast_time(const void* object) {
-        return DynamicObject(object)->m_dynamicObject->m_castTime;
-    }
-
-    // --- corpse.def -----------------------------------------------------------------------------
-
-    uint64_t WXL_CALL corpse_owner(const void* object) {
-        return Corpse(object)->m_corpse->m_corpseFieldOwner.m_guid;
-    }
-
-    uint64_t WXL_CALL corpse_party(const void* object) {
-        return Corpse(object)->m_corpse->m_corpseFieldParty.m_guid;
-    }
-
-    uint32_t WXL_CALL corpse_display_id(const void* object) {
-        return Corpse(object)->m_corpse->m_corpseFieldDisplayId;
-    }
-
-    uint32_t WXL_CALL corpse_guild(const void* object) {
-        return Corpse(object)->m_corpse->m_corpseFieldGuild;
-    }
-
-    uint32_t WXL_CALL corpse_flags(const void* object) {
-        return Corpse(object)->m_corpse->m_corpseFieldFlags;
-    }
-
-    uint32_t WXL_CALL corpse_dynamic_flags(const void* object) {
-        return Corpse(object)->m_corpse->m_corpseFieldDynamicFlags;
-    }
-
     // --- gameui.def -----------------------------------------------------------------------------
 
     uint64_t WXL_CALL ui_target_guid(void) {
@@ -446,16 +205,6 @@ namespace WarcraftXL::Binding {
 
     uint8_t WXL_CALL ui_logging_in(void) {
         return CGGameUI::m_loggingIn;
-    }
-
-    // --- maparea.def ----------------------------------------------------------------------------
-
-    int32_t WXL_CALL map_area_tile_x(const void* object) {
-        return static_cast<const CMapArea*>(object)->m_index.x;
-    }
-
-    int32_t WXL_CALL map_area_tile_y(const void* object) {
-        return static_cast<const CMapArea*>(object)->m_index.y;
     }
 
     // --- script.def -----------------------------------------------------------------------------
@@ -561,20 +310,6 @@ namespace WarcraftXL::Binding {
 
     void WXL_CALL script_signal_event(uint32_t index, void* state, int32_t arg_count) {
         FrameScript_SignalEvent(index, State(state), arg_count);
-    }
-
-    // The NetClient rows read the message a seam was handed, and never move its read cursor:
-    // that cursor is where the client's own parsing starts.
-    const void* WXL_CALL message_data(const void* message) {
-        return message ? static_cast<const CDataStore*>(message)->m_data : nullptr;
-    }
-
-    uint32_t WXL_CALL message_size(const void* message) {
-        return message ? static_cast<const CDataStore*>(message)->m_size : 0u;
-    }
-
-    uint32_t WXL_CALL message_read(const void* message) {
-        return message ? static_cast<const CDataStore*>(message)->m_read : 0u;
     }
 
     // The Storage rows are the client's own file layer, called where it lives. A `file` is the
