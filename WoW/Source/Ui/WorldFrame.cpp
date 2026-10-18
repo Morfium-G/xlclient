@@ -88,6 +88,7 @@
 #include <cfloat>
 #include <cmath>
 #include "WoW/Source/Ui/SpellBookFrame.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x009F9864
 static const uint32_t s_skinCursorModes[2] = { 21, 20 };
@@ -2091,6 +2092,7 @@ void CGWorldFrame::OnWorldUpdate() {
 // VERIFY: 09c5961f manual
 // OFFSET: 0x004FAF90
 void CGWorldFrame::RenderWorld(void* param) {
+    wxl::seam::WorldFrame::RenderWorld::Before(param);
     CGWorldFrame* worldFrame = static_cast<CGWorldFrame*>(param);
     C44Matrix projection;
     C44Matrix view;
@@ -2105,6 +2107,7 @@ void CGWorldFrame::RenderWorld(void* param) {
     g_theGxDevicePtr->XformSetProjection(projection);
     g_theGxDevicePtr->XformSetView(view);
     CShaderEffect::UpdateProjMatrix();
+    wxl::seam::WorldFrame::RenderWorld::After(param);
 }
 
 // VERIFY: 3e6634ba auto

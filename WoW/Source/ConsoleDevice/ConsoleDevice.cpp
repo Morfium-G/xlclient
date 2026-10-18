@@ -20,6 +20,7 @@
 #include "WoW/Source/Client.h"
 #include "WoW/Source/Hardware.h"
 #include "WoW/Source/Ui/GameUI.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00CABAC8
 static int32_t s_consoleGxOverrideSet[GxOverrides_Last];
@@ -309,6 +310,7 @@ void RemoveConsoleDeviceDefaultCallback(void (*callback)(OPTION_PAGE page)) {
 // VERIFY: 9ac5dfc9 manual
 // OFFSET: 0x0076AB80
 void ConsoleDeviceInitialize(const char* title, bool unused_a2, bool unused_a3) {
+    wxl::seam::ConsoleDevice::Initialize::Before(title, unused_a2, unused_a3);
     GxLogOpen();
 
     s_cvHwDetect = CVar::Register("hwDetect", "do hardware detection", 1, "1", nullptr, CATEGORY_GRAPHICS, false, nullptr, false);
@@ -516,6 +518,7 @@ void ConsoleDeviceInitialize(const char* title, bool unused_a2, bool unused_a3) 
         OsSetSleepInBackground(1);
         OsSetBackgroundSleepMs(250);
 
+        wxl::seam::ConsoleDevice::Initialize::After(title, unused_a2, unused_a3);
         return;
     }
 

@@ -12,6 +12,7 @@
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "ThirdParty/nvapi/nvapi.h"
+#include "WarcraftXL/Seams.h"
 
 typedef IDirect3D9* (WINAPI* Direct3DCreate9Proc)(UINT sdkVersion);
 
@@ -2655,6 +2656,7 @@ int32_t CGxDeviceD3d::ICreateD3dDevice(const CGxFormat& format) {
 // VERIFY: 7e7b165d manual
 // OFFSET: 0x00690150
 void CGxDeviceD3d::IReleaseD3dResources(int32_t freeTextures) {
+    wxl::seam::Gx::ReleaseD3dResources::Before(this, freeTextures);
     this->ITexForceRecreation(freeTextures);
     this->IReleaseD3dShaders(freeTextures);
     this->IReleaseD3dPools(freeTextures);
@@ -2690,6 +2692,7 @@ void CGxDeviceD3d::IReleaseD3dResources(int32_t freeTextures) {
     if (this->m_d3dDevice) {
         this->m_d3dDevice->ShowCursor(FALSE);
     }
+    wxl::seam::Gx::ReleaseD3dResources::After(this, freeTextures);
 }
 
 // VERIFY: 2f85a8b3 manual

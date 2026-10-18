@@ -9,6 +9,7 @@
 #include "Engine/Source/Tempest/C3Vector.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00A2D57C
 static const uint32_t s_texelSize[GxTexFormats_Last] = { 0, 4, 4, 2, 2, 2, 2, 4, 4, 2, 4, 4, 4 };
@@ -1095,9 +1096,11 @@ void GxuFlushDrawList(EGxuDrawListCategory category, const C3Vector& viewPos) {
 // VERIFY: 456ff928 auto
 // OFFSET: 0x00682A00
 void GxScenePresent() {
+    wxl::seam::Gx::ScenePresent::Before();
     C3Vector viewPos(0.0f, 0.0f, 0.0f);
     GxuFlushDrawList(GxuCat_2, viewPos);
     g_theGxDevicePtr->ScenePresent();
+    wxl::seam::Gx::ScenePresent::After();
 }
 
 // VERIFY: 6d471ae7 auto

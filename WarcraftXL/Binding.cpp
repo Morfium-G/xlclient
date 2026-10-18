@@ -6,6 +6,9 @@
 #include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/FrameScript/FrameScript.h"
+#include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
+#include "Engine/Source/Gx/Gx.h"
+#include "Engine/Source/Tempest/CRect.h"
 #include "Engine/Source/Tempest/C3Vector.h"
 #include "Engine/Source/lua-5.1/src/lua.h"
 #include "WoW/Source/Object/Container.h"
@@ -627,5 +630,34 @@ namespace WarcraftXL::Binding {
     wxl_bool WXL_CALL archive_mount(const char* path, int32_t priority) {
         SArchive* archive = nullptr;
         return path && SFile::OpenArchive(path, priority, 0, &archive) ? WXL_TRUE : WXL_FALSE;
+    }
+
+    // --- Gx ---------------------------------------------------------------------------------
+    // GxHasContext and GxIsWindowVisible test the device pointer themselves.
+    // GxCapsWindowSizeInScreenCoords does not, so the size answers false without a device.
+
+    wxl_bool WXL_CALL gx_device_exists() {
+        return g_theGxDevicePtr ? WXL_TRUE : WXL_FALSE;
+    }
+
+    wxl_bool WXL_CALL gx_has_context() {
+        return GxHasContext() ? WXL_TRUE : WXL_FALSE;
+    }
+
+    wxl_bool WXL_CALL gx_window_visible() {
+        return GxIsWindowVisible() ? WXL_TRUE : WXL_FALSE;
+    }
+
+    wxl_bool WXL_CALL gx_window_size(uint32_t* width, uint32_t* height) {
+        if (!width || !height || !g_theGxDevicePtr) {
+            return WXL_FALSE;
+        }
+        CRect rect = {};
+        GxCapsWindowSizeInScreenCoords(rect);
+        const float w = rect.maxX - rect.minX;
+        const float h = rect.maxY - rect.minY;
+        *width = w > 0.0f ? static_cast<uint32_t>(w + 0.5f) : 0u;
+        *height = h > 0.0f ? static_cast<uint32_t>(h + 0.5f) : 0u;
+        return WXL_TRUE;
     }
 }

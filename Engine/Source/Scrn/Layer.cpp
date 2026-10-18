@@ -18,6 +18,7 @@
 #include "Engine/Source/SoundEngine/SoundEngine.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x009EDCB8
 static const RECTF s_defaultRect = { 0.0f, 0.0f, 1.0f, 1.0f };
@@ -154,6 +155,7 @@ static int32_t CaptureScreen() {
 // VERIFY: 52c6418c manual
 // OFFSET: 0x004A8720
 static int32_t OnPaint(const void* data, void* param) {
+    wxl::seam::Scrn::OnPaint::Before(data, param);
     if (GxHasContext() && GxIsWindowVisible()) {
         HSRGN rgn;
         SRgnCreate(&rgn, 0);
@@ -220,6 +222,7 @@ static int32_t OnPaint(const void* data, void* param) {
                 s_elapsedSec = 0.0f;
                 s_screenshotCallback = nullptr;
 
+                wxl::seam::Scrn::OnPaint::After(1, data, param);
                 return 1;
             }
 
@@ -246,6 +249,7 @@ static int32_t OnPaint(const void* data, void* param) {
         }
     }
 
+    wxl::seam::Scrn::OnPaint::After(1, data, param);
     return 1;
 }
 

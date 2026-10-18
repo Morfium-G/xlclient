@@ -25,6 +25,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CRect.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00B499A8
 CSimpleTop* CSimpleTop::s_instance;
@@ -893,6 +894,7 @@ void CSimpleTop::OnLayerUpdate(float elapsedSec) {
 // VERIFY: 587fb7f2 auto
 // OFFSET: 0x00495410
 void CSimpleTop::OnLayerRender() {
+    wxl::seam::SimpleTop::OnLayerRender::Before(this);
     C2Vector offset;
     CameraSetupScreenProjection(this->m_rect, offset, 0.0f, 0);
 
@@ -900,6 +902,7 @@ void CSimpleTop::OnLayerRender() {
         this->m_strata[strata]->BuildBatches(this->m_mouseCapture == nullptr);
         this->m_strata[strata]->RenderBatches();
     }
+    wxl::seam::SimpleTop::OnLayerRender::After(this);
 }
 
 // VERIFY: 6721d10a manual

@@ -15,6 +15,7 @@
 #include "Engine/Source/Os/OsFile.h"
 #include "Engine/Source/Os/Processor.h"
 #include "Engine/Source/Os/TimeManager.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00A2DAF8
 const uint32_t CGxDevice::s_texFormatBitDepth[GxTexFormats_Last] = { 0, 32, 32, 16, 16, 16, 4, 8, 8, 16, 32, 32, 32 };
@@ -280,9 +281,11 @@ void CGxDevice::DeviceSetRenderTarget(EGxBuffer buffer, CGxTex* texture, uint32_
 // VERIFY: 48d0bcc7 auto
 // OFFSET: 0x006843B0
 void CGxDevice::NotifyOnDeviceRestored() {
+    wxl::seam::Gx::NotifyOnDeviceRestored::Before(this);
     for (uint32_t i = 0; i < this->m_deviceRestoredCallbacks.Count(); i++) {
         this->m_deviceRestoredCallbacks[i]();
     }
+    wxl::seam::Gx::NotifyOnDeviceRestored::After(this);
 }
 
 // VERIFY: 27328acc auto
