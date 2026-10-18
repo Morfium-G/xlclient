@@ -1133,7 +1133,6 @@ static int32_t FrameScript_HandleError(lua_State* L) {
 // VERIFY: 6d24b23a auto
 // OFFSET: 0x00819BB0
 int32_t FrameScript_Initialize(int32_t profile) {
-    wxl::seam::FrameScript::Initialize::Before(profile);
     s_mempool = luaM_initPool();
     s_context = lua_newstate(luaM_reallocPool, s_mempool, profile);
     s_scriptTimeUsed = 0;
@@ -1444,7 +1443,6 @@ void FrameScript_Destroy() {
     s_mempool = nullptr;
     s_scriptEventsHash.Clear();
     s_scriptEvents.Clear();
-    wxl::seam::FrameScript::Destroy::After();
 }
 
 // VERIFY: 8009da99 manual
@@ -1612,7 +1610,6 @@ void FrameScript_SignalEvent(uint32_t index, const char* format, ...) {
 // VERIFY: 2207d978 manual
 // OFFSET: 0x0081B5F0
 void FrameScript_CreateEvents(const char** names, uint32_t count) {
-    wxl::seam::FrameScript::CreateEvents::Before(names, count);
     s_scriptEvents.SetCount(count);
 
     for (uint32_t i = 0; i < count; i++) {

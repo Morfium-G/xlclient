@@ -536,8 +536,6 @@ static void WowClientDestroy() {
     ConsoleCommandUnregister("timingInfo");
     ClientDBShutdown();
     SysMsgShutdown();
-
-    wxl::seam::Client::Destroy::After();
 }
 
 // VERIFY: ebfeeaaf manual

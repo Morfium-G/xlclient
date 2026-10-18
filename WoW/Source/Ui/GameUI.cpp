@@ -2424,7 +2424,6 @@ void CGGameUI::ResetCamera(WOWGUID guid) {
 // VERIFY: 21eb442b manual
 // OFFSET: 0x00518DC0
 void CGGameUI::SendTarget(WOWGUID guid) {
-    wxl::seam::GameUI::SendTarget::Before(guid.m_guid);
     CDataStore msg;
     msg.Put(static_cast<uint32_t>(CMSG_SET_SELECTION));
     msg.Put(guid.m_guid);
@@ -2667,7 +2666,6 @@ bool IsTutorialFlagged(uint32_t tutorial) {
 // VERIFY: 9f2b88f1 manual
 // OFFSET: 0x005241B0
 void CGGameUI::ClearTarget(WOWGUID guid, int32_t a2) {
-    wxl::seam::GameUI::ClearTarget::Before(guid.m_guid, a2);
     int32_t noMgr = ClntObjMgrGetCurrent() == nullptr;
 
     if (!CGGameUI::m_lockedTarget || (guid && guid != CGGameUI::m_lockedTarget)) {

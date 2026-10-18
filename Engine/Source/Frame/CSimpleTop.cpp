@@ -894,7 +894,6 @@ void CSimpleTop::OnLayerUpdate(float elapsedSec) {
 // VERIFY: 587fb7f2 auto
 // OFFSET: 0x00495410
 void CSimpleTop::OnLayerRender() {
-    wxl::seam::SimpleTop::OnLayerRender::Before(this);
     C2Vector offset;
     CameraSetupScreenProjection(this->m_rect, offset, 0.0f, 0);
 

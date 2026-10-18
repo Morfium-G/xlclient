@@ -545,7 +545,6 @@ static int32_t SkipPartialObjectUpdate(CDataStore* msg) {
 // VERIFY: 3b1806d2 auto
 // OFFSET: 0x004D3FF0
 static void InitObject(CGObject_C* object, const CClientObjCreate& create, uint32_t time) {
-    wxl::seam::ObjectMgr::InitObject::Before(object, &create, time);
     switch (object->m_typeId) {
         case ID_ITEM: {
             new (object) CGItem_C(time, create);
@@ -615,7 +614,6 @@ static void DestroyRemovedObject(CGObject_C* object) {
     } else {
         ObjectFree(s_objHeapIds[object->m_typeId], object->m_heapIndex);
     }
-    wxl::seam::ObjectMgr::DestroyRemovedObject::After(object);
 }
 
 // VERIFY: e9d855a0 auto
@@ -1451,7 +1449,6 @@ static void ObjDelete(CGObject_C* object) {
 
     mgr->m_lazyCleanupObjects.Insert(object, hashval, key);
     s_curMgr->m_lazyCleanupFifo[object->m_typeId - 1].LinkToTail(object);
-    wxl::seam::ObjectMgr::ObjDelete::After(object);
 }
 
 // VERIFY: 1ddf9f77 auto

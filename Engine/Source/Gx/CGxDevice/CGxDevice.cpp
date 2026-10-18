@@ -285,7 +285,6 @@ void CGxDevice::NotifyOnDeviceRestored() {
     for (uint32_t i = 0; i < this->m_deviceRestoredCallbacks.Count(); i++) {
         this->m_deviceRestoredCallbacks[i]();
     }
-    wxl::seam::Gx::NotifyOnDeviceRestored::After(this);
 }
 
 // VERIFY: 27328acc auto

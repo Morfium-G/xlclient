@@ -134,7 +134,6 @@ void IEvtDispatchUpdate(EvtContext* context, uint32_t currTime, float elapsedSec
 
         IEvtQueueDispatch(context, EVENT_ID_UPDATE, &data);
     }
-    wxl::seam::Event::DispatchUpdate::After(context, currTime, elapsedSec);
 }
 
 // VERIFY: 8e0d29f6 manual

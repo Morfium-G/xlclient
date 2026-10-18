@@ -222,7 +222,6 @@ static int32_t OnPaint(const void* data, void* param) {
                 s_elapsedSec = 0.0f;
                 s_screenshotCallback = nullptr;
 
-                wxl::seam::Scrn::OnPaint::After(1, data, param);
                 return 1;
             }
 
@@ -249,7 +248,6 @@ static int32_t OnPaint(const void* data, void* param) {
         }
     }
 
-    wxl::seam::Scrn::OnPaint::After(1, data, param);
     return 1;
 }
 

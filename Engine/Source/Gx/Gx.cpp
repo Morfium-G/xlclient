@@ -1100,7 +1100,6 @@ void GxScenePresent() {
     C3Vector viewPos(0.0f, 0.0f, 0.0f);
     GxuFlushDrawList(GxuCat_2, viewPos);
     g_theGxDevicePtr->ScenePresent();
-    wxl::seam::Gx::ScenePresent::After();
 }
 
 // VERIFY: 6d471ae7 auto

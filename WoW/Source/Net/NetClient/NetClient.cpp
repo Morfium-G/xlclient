@@ -400,8 +400,6 @@ int32_t NetClient::HandleData(uint32_t timeReceived, void* data, int32_t size) {
 // VERIFY: 72928567 auto
 // OFFSET: 0x00632510
 int32_t NetClient::HandleConnect() {
-    wxl::seam::NetClient::HandleConnect::Before(this);
-
     if (this->m_objMgr) {
         NetClient::PushObjMgr(this->m_objMgr);
     }
@@ -427,7 +425,6 @@ int32_t NetClient::HandleDisconnect() {
     CGlueMgr::NetDisconnectHandler(this);
     NetClient::PopObjMgr();
 
-    wxl::seam::NetClient::HandleDisconnect::After(1, this);
     return 1;
 }
 

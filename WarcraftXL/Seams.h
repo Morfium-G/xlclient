@@ -36,12 +36,22 @@ namespace wxl::seam {
         inline constexpr ::wxl::seam::detail::Nop Before{}; \
         inline constexpr ::wxl::seam::detail::Nop After{};  \
     }
+#define WXL_SEAM_BEFORE(domain, name, symbol, ret, conv, params) \
+    namespace domain::name {                                     \
+        inline constexpr ::wxl::seam::detail::Nop Before{};      \
+    }
+#define WXL_SEAM_AFTER(domain, name, symbol, ret, conv, params) \
+    namespace domain::name {                                    \
+        inline constexpr ::wxl::seam::detail::Nop After{};      \
+    }
 #define WXL_SEAM_GATE(domain, name, symbol, ret, conv, params) \
     namespace domain::name {                                   \
         inline constexpr ::wxl::seam::detail::NopGate Gate{};  \
     }
 #include "wxl/seams/seams.def"
 #undef WXL_SEAM_GATE
+#undef WXL_SEAM_AFTER
+#undef WXL_SEAM_BEFORE
 #undef WXL_SEAM
 }
 
