@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "Engine/Source/Base/CDataStore.h"
+#include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/FrameScript/FrameScript.h"
 #include "Engine/Source/Tempest/C3Vector.h"
 #include "Engine/Source/lua-5.1/src/lua.h"
@@ -571,5 +572,60 @@ namespace WarcraftXL::Binding {
 
     uint32_t WXL_CALL message_read(const void* message) {
         return message ? static_cast<const CDataStore*>(message)->m_read : 0u;
+    }
+
+    // The Storage rows are the client's own file layer, called where it lives. A `file` is the
+    // SFileImpl the client handed back; nothing above this knows what it is.
+    SFileImpl* File(void* file) {
+        return static_cast<SFileImpl*>(file);
+    }
+
+    wxl_bool WXL_CALL file_exists(const char* path) {
+        return path && SFile::FileExists(path) ? WXL_TRUE : WXL_FALSE;
+    }
+
+    void* WXL_CALL file_open(const char* path) {
+        SFileImpl* file = nullptr;
+        return path && SFileOpenFile(path, &file) ? file : nullptr;
+    }
+
+    uint64_t WXL_CALL file_size(void* file) {
+        if (!file) {
+            return 0;
+        }
+        uint32_t high = 0;
+        uint32_t low = SFileGetFileSize(File(file), &high);
+        return (static_cast<uint64_t>(high) << 32) | low;
+    }
+
+    wxl_bool WXL_CALL file_seek(void* file, uint64_t offset) {
+        if (!file) {
+            return WXL_FALSE;
+        }
+        int32_t high = static_cast<int32_t>(offset >> 32);
+        // Method 0 is FILE_BEGIN: the offset is absolute, which is what read_at means.
+        return SFile::SetFilePointer(File(file), static_cast<int32_t>(offset & 0xFFFFFFFFu), &high, 0)
+                   ? WXL_TRUE
+                   : WXL_FALSE;
+    }
+
+    uint32_t WXL_CALL file_read(void* file, void* buffer, uint32_t count) {
+        if (!file || !buffer || !count) {
+            return 0;
+        }
+        uint32_t read = 0;
+        SFileReadFile(File(file), buffer, count, &read, nullptr, 0);
+        return read;
+    }
+
+    void WXL_CALL file_close(void* file) {
+        if (file) {
+            SFileCloseFile(File(file));
+        }
+    }
+
+    wxl_bool WXL_CALL archive_mount(const char* path, int32_t priority) {
+        SArchive* archive = nullptr;
+        return path && SFile::OpenArchive(path, priority, 0, &archive) ? WXL_TRUE : WXL_FALSE;
     }
 }
