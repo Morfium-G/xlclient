@@ -1,4 +1,5 @@
 #include "Spell_C.h"
+#include "WarcraftXL/Seams.h"
 #include "WoW/Source/Magic/Types.h"
 #include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/ConsoleBase/ConsoleVar.h"
@@ -1102,6 +1103,7 @@ void PendingSpellCast::OnSpellStartPacket(CDataStore* msg) {
 // VERIFY: ccbce7b4 manual
 // OFFSET: 0x0080FEE0
 int32_t Packet_Group_30(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_Group_30::Before(param, msgId, time, msg);
     SmartGUID castItem;
     SmartGUID caster;
     *msg >> castItem;
@@ -1454,6 +1456,7 @@ void SpellHistory::ClearOnHold(int32_t spellId, uint32_t time, bool remove) {
 // VERIFY: b0e39839 manual
 // OFFSET: 0x00809C70
 int32_t Packet_SMSG_SPELL_FAILURE(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg) {
+    wxl::seam::Spell::Packet_SMSG_SPELL_FAILURE::Before(param, msgId, time, msg);
     SmartGUID caster;
     *msg >> caster;
     uint8_t castCount;
@@ -6248,6 +6251,7 @@ static UIErrors GetSpellFailedError(int32_t reason, const SpellRec* spell, int32
 // VERIFY: 613e78c7 manual
 // OFFSET: 0x00808200
 void Spell_C_SpellFailed(PendingSpellCast* cast, const SpellRec* spell, int32_t reason, int32_t misc1, int32_t misc2, bool resetCooldown) {
+    wxl::seam::Spell::SpellFailed::Before(cast, spell, reason, misc1, misc2, resetCooldown);
     int32_t spellId = cast->m_data.m_spellId;
     bool suppress = false;
 
@@ -8165,6 +8169,16 @@ static bool Spell_C_BeginCast(CGUnit_C* caster, const SpellRec* spell, WOWGUID t
 // VERIFY: f2938ae3 manual
 // OFFSET: 0x0080CCE0
 bool Spell_C_CastSpell(CGUnit_C* caster, int32_t spellId, const CGItem_C* item, WOWGUID target, PendingSpellCast* cast, bool confirmed) {
+    uint8_t gated = 0;
+    void* wxlCaster = caster;
+    const void* wxlItem = item;
+    uint64_t wxlTarget = target.m_guid;
+    void* wxlCast = cast;
+    uint8_t wxlConfirmed = confirmed;
+    if (wxl::seam::Spell::CastSpell::Gate(&gated, &wxlCaster, &spellId, &wxlItem, &wxlTarget, &wxlCast, &wxlConfirmed)) {
+        return gated != 0;
+    }
+
     SpellRec spell;
 
     if (!g_spellDB.GetRecord(spellId, &spell) || (spell.m_attributes & 0x40)) {

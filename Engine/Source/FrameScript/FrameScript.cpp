@@ -1102,6 +1102,9 @@ void FrameScript_PackVariable(lua_State* L, const char* name, int32_t depth, cha
 // VERIFY: 472836ad auto
 // OFFSET: 0x00819730
 static int32_t FrameScript_HandleError(lua_State* L) {
+    void* wxlState = L;
+    wxl::seam::FrameScript::HandleError::Before(wxlState);
+
     if (!lua_isstring(L, -1)) {
         lua_pushstring(L, "UNKNOWN ERROR");
         lua_insert(L, -1);
@@ -1513,6 +1516,8 @@ void FrameScript_Flush() {
 // VERIFY: 34c0cd89 manual
 // OFFSET: 0x0081AC90
 void vFrameScript_SignalEvent(uint32_t index, const char* format, va_list args) {
+    wxl::seam::FrameScript::vSignalEvent::Before(index, format, args);
+
     if (!s_scriptEvents.Count()) {
         return;
     }

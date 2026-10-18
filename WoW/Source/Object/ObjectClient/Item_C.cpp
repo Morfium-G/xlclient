@@ -1,4 +1,5 @@
 #include "Item_C.h"
+#include "WarcraftXL/Seams.h"
 #include "WoW/Source/DB/Rec/ItemVisualsRec.h"
 #include "WoW/Source/Ui/ItemSocketInfo.h"
 #include "WoW/Source/Ui/LootFrame.h"
@@ -1500,6 +1501,13 @@ WOWGUID CGItem_C::s_bindOnUseItem;
 // VERIFY: 92b5a602 manual
 // OFFSET: 0x00708C20
 int32_t CGItem_C::UseItem(WOWGUID* target, int32_t confirmed) {
+    void* self = this;
+    const uint64_t* wxlTarget = target ? &target->m_guid : nullptr;
+    int32_t gated = 0;
+    if (wxl::seam::Item::UseItem::Gate(&gated, &self, &wxlTarget, &confirmed)) {
+        return gated;
+    }
+
     if ((this->m_obj->m_type & TYPEMASK_CONTAINER) || (this->m_itemFlags & 1)) {
         return 0;
     }
