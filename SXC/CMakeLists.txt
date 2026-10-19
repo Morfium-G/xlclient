@@ -14,6 +14,20 @@ add_library(SXC STATIC
 target_include_directories(SXC
     PUBLIC
         ${CMAKE_SOURCE_DIR}
+        # Dear ImGui (ThirdParty/imgui/VERSION): its backends include "imgui.h" from here, and modules
+        # drawing overlay panels may too.
+        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui
+)
+
+# The overlay's Vulkan side: the Khronos headers without prototypes, as the backend uses them; ImGui
+# loads its Vulkan functions through the backend's vkGetInstanceProcAddr (SXC/Ui/UiVulkan.h).
+target_link_libraries(SXC
+    PUBLIC
+        VulkanHeaders
+)
+target_compile_definitions(SXC
+    PUBLIC
+        IMGUI_IMPL_VULKAN_NO_PROTOTYPES
 )
 
 # The build number the client sends to the login server, which compares it against the realm list
