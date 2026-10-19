@@ -90,6 +90,14 @@ namespace SXC::Data {
         Row Add();
         Row Clone(uint32_t index);
         void Remove(uint32_t index);
+        // The row as in the file (loaded or last saved). A row added since is removed: false then.
+        bool Revert(uint32_t index);
+
+        // Edits in quick succession (a dragged slider) are one step. Reload starts the history over.
+        bool CanUndo() const;
+        bool CanRedo() const;
+        void Undo();
+        void Redo();
         // Marks the table edited and tells subscribers (Row's setters and the calls above do it themselves).
         void Touch();
 
@@ -121,6 +129,10 @@ namespace SXC::Data {
     // Watches the loose files. Called every frame (SXC::Startup registers it).
     void Tick();
 
-    // The "Data" view's content: the registered tables, the selected one's rows. Inside an ImGui window.
+    // The "Data" view's content: the registered tables, the selected one's rows and the selected row's
+    // form. Inside an ImGui window.
     void DrawBrowser();
+
+    // The row windows opened from the editor (references, double-clicked rows). Every overlay frame.
+    void DrawWindows();
 }

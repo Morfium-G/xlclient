@@ -136,7 +136,7 @@ namespace SXC::Data {
     }
 
     Field& Schema::Id(const char* name) {
-        return Add(FieldType::Id, name, 1).ReadOnly();
+        return Add(FieldType::Id, name, 1);
     }
 
     Field& Schema::Int(const char* name) {

@@ -1,102 +1,57 @@
 #include "SXC/Data/Data.h"
 
-#include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
+#include "SXC/Data/Editor.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 
 namespace {
     using namespace SXC::Data;
 
+    const ImVec4 kWarning(1.0f, 0.75f, 0.3f, 1.0f);
+
+    // The selected row per table: its id, and where it was last seen (ids can repeat).
+    struct Selection {
+        uint32_t id = 0;
+        uint32_t index = 0;
+        bool valid = false;
+    };
+
     std::string s_selected;
+    std::unordered_map<std::string, Selection> s_rowSelection;
     char s_filter[128];
     std::string s_saveError;
 
-    // One cell as text: named values by name, flags by their bits, foreign keys with the target's name.
-    std::string FormatCell(Table& table, const Row& row, int index) {
-        const Field& field = table.GetSchema().FieldAt(index);
-        char buffer[128];
-        std::string text;
+    Row SelectedRow(Table& table) {
+        Selection& selection = s_rowSelection[table.Name()];
 
-        for (uint32_t e = 0; e < field.count; e++) {
-            if (e > 0) {
-                text += ", ";
-            }
-
-            if (field.IsString()) {
-                const std::string& value = row.String(index, e);
-                const size_t newline = value.find('\n');
-                text += newline == std::string::npos ? value : value.substr(0, newline) + " ...";
-                continue;
-            }
-
-            double value;
-
-            if (field.IsFloat()) {
-                value = row.Float(index, e);
-                snprintf(buffer, sizeof(buffer), "%g", value);
-            } else if (field.type == FieldType::Uint || field.type == FieldType::Id) {
-                value = row.Uint(index, e);
-                snprintf(buffer, sizeof(buffer), "%u", row.Uint(index, e));
-            } else if (field.type == FieldType::Flags || field.type == FieldType::Color) {
-                value = row.Uint(index, e);
-                snprintf(buffer, sizeof(buffer), field.colorFormat == ColorFormat::Argb ? "0x%08X" : "0x%06X", row.Uint(index, e));
-            } else if (field.type == FieldType::Bool) {
-                value = row.Uint(index, e);
-                snprintf(buffer, sizeof(buffer), "%s", row.Bool(index, e) ? "yes" : "no");
-            } else {
-                value = row.Int(index, e);
-                snprintf(buffer, sizeof(buffer), "%d", row.Int(index, e));
-            }
-
-            const char* name = field.NameOf(value);
-
-            if (name && field.type == FieldType::Enum) {
-                text += name;
-                continue;
-            }
-
-            text += buffer;
-
-            if (name) {
-                text += std::string(" (") + name + ")";
-            } else if (field.type == FieldType::Flags) {
-                std::string names;
-                const uint32_t bits = row.Uint(index, e);
-
-                for (const NamedValue& bit : field.bits) {
-                    if (bits & static_cast<uint32_t>(bit.value)) {
-                        names += (names.empty() ? "" : ", ") + bit.name;
-                    }
-                }
-
-                if (!names.empty()) {
-                    text += " (" + names + ")";
-                }
-            } else if (field.type == FieldType::ForeignKey && value != 0.0 && Get(field.target.c_str())) {
-                const Row targetRow = Get(field.target.c_str())->Find(row.Uint(index, e));
-
-                if (!targetRow) {
-                    text += " (missing)";
-                } else if (!field.display.empty()) {
-                    const std::string& display = targetRow.String(field.display.c_str());
-
-                    if (!display.empty()) {
-                        text += " " + display;
-                    }
-                }
-            }
+        if (!selection.valid) {
+            return Row();
         }
 
-        return text;
+        Row row = table.At(selection.index);
+
+        if (!row || row.Id() != selection.id) {
+            row = table.Find(selection.id);
+        }
+
+        if (row) {
+            selection.index = row.Index();
+        }
+
+        return row;
+    }
+
+    void Select(Table& table, const Row& row) {
+        Selection& selection = s_rowSelection[table.Name()];
+        selection.valid = static_cast<bool>(row);
+        selection.id = row ? row.Id() : 0;
+        selection.index = row ? row.Index() : 0;
     }
 
     bool Contains(const std::string& text, const char* filter) {
-        if (!*filter) {
-            return true;
-        }
-
         const size_t length = strlen(filter);
 
         for (size_t i = 0; i + length <= text.size(); i++) {
@@ -108,22 +63,6 @@ namespace {
         return false;
     }
 
-    void DrawColorSwatch(const Field& field, const Row& row, int index) {
-        ImVec4 color;
-
-        if (field.colorFormat == ColorFormat::Float3) {
-            color = ImVec4(row.Float(index, 0), row.Float(index, 1), row.Float(index, 2), 1.0f);
-        } else {
-            const uint32_t value = row.Uint(index);
-            color = ImVec4(((value >> 16) & 0xFF) / 255.0f, ((value >> 8) & 0xFF) / 255.0f, (value & 0xFF) / 255.0f,
-                           field.colorFormat == ColorFormat::Argb ? ((value >> 24) & 0xFF) / 255.0f : 1.0f);
-        }
-
-        const float size = ImGui::GetTextLineHeight();
-        ImGui::ColorButton("##swatch", color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_AlphaPreviewHalf, ImVec2(size, size));
-        ImGui::SameLine();
-    }
-
     void DrawTableList() {
         for (size_t i = 0; i < TableCount(); i++) {
             Table* table = TableAt(i);
@@ -131,7 +70,7 @@ namespace {
             const bool problem = !table->Loaded() || table->ChangedOnDisk() || table->DuplicateIds();
 
             if (problem) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, kWarning);
             }
 
             if (ImGui::Selectable(label.c_str(), s_selected == table->Name())) {
@@ -147,7 +86,7 @@ namespace {
         }
     }
 
-    void DrawRows(Table& table) {
+    void DrawRows(Table& table, const Row& selected) {
         const Schema& schema = table.GetSchema();
         std::vector<int> shown;
 
@@ -167,7 +106,7 @@ namespace {
             }
 
             for (int f : shown) {
-                if (Contains(FormatCell(table, table.At(r), f), s_filter)) {
+                if (Contains(Editor::FormatCell(table, table.At(r), f), s_filter)) {
                     matches.push_back(r);
                     break;
                 }
@@ -184,11 +123,9 @@ namespace {
         ImGui::TableSetupScrollFreeze(1, 1);
 
         for (int f : shown) {
-            const Field& field = schema.FieldAt(f);
-            ImGui::TableSetupColumn(field.label.c_str(), f == 0 ? ImGuiTableColumnFlags_NoHide : ImGuiTableColumnFlags_None);
+            ImGui::TableSetupColumn(schema.FieldAt(f).label.c_str(), f == 0 ? ImGuiTableColumnFlags_NoHide : ImGuiTableColumnFlags_None);
         }
 
-        // Headers with the field's tooltip.
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
 
         for (size_t c = 0; c < shown.size(); c++) {
@@ -196,18 +133,8 @@ namespace {
             ImGui::TableSetColumnIndex(static_cast<int>(c));
             ImGui::TableHeader(field.label.c_str());
 
-            if (ImGui::IsItemHovered()) {
-                std::string tip = schema.ColumnName(shown[c], 0);
-
-                if (field.count > 1) {
-                    tip = field.name + " (" + std::to_string(field.count) + " columns)";
-                }
-
-                if (!field.tooltip.empty()) {
-                    tip += "\n" + field.tooltip;
-                }
-
-                ImGui::SetTooltip("%s", tip.c_str());
+            if (ImGui::IsItemHovered() && !field.tooltip.empty()) {
+                ImGui::SetTooltip("%s\n%s", field.name.c_str(), field.tooltip.c_str());
             }
         }
 
@@ -225,11 +152,37 @@ namespace {
                     ImGui::TableSetColumnIndex(static_cast<int>(c));
                     ImGui::PushID(static_cast<int>(c));
 
-                    if (field.type == FieldType::Color) {
-                        DrawColorSwatch(field, row, shown[c]);
+                    if (c == 0) {
+                        // The row's selectable, spanning all columns.
+                        const bool duplicate = table.Find(row.Id()).Index() != row.Index();
+
+                        if (duplicate) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, kWarning);
+                        }
+
+                        const bool isSelected = selected && selected.Index() == row.Index();
+
+                        if (ImGui::Selectable(Editor::FormatCell(table, row, shown[c]).c_str(), isSelected,
+                                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick)) {
+                            Select(table, row);
+
+                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                Editor::OpenRowWindow(table.Name(), row.Id());
+                            }
+                        }
+
+                        if (duplicate) {
+                            ImGui::PopStyleColor();
+                            ImGui::SetItemTooltip("another row has this id too");
+                        }
+                    } else {
+                        if (field.type == FieldType::Color) {
+                            Editor::DrawSwatch(field, row, shown[c]);
+                        }
+
+                        ImGui::TextUnformatted(Editor::FormatCell(table, row, shown[c]).c_str());
                     }
 
-                    ImGui::TextUnformatted(FormatCell(table, row, shown[c]).c_str());
                     ImGui::PopID();
                 }
 
@@ -238,6 +191,100 @@ namespace {
         }
 
         ImGui::EndTable();
+    }
+
+    void DrawToolbar(Table& table, const Row& selected) {
+        if (ImGui::Button("Add")) {
+            Select(table, table.Add());
+        }
+
+        ImGui::SetItemTooltip("a new row with the next free id and every field's default");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!selected);
+
+        if (ImGui::Button("Clone")) {
+            Select(table, table.Clone(selected.Index()));
+        }
+
+        ImGui::SetItemTooltip("a copy of the selected row with the next free id");
+        ImGui::SameLine();
+
+        if (ImGui::Button("Delete")) {
+            ImGui::OpenPopup("##delete");
+        }
+
+        ImGui::EndDisabled();
+
+        if (ImGui::BeginPopup("##delete")) {
+            ImGui::Text("Delete row %u? (Reload brings it back until you save.)", selected.Id());
+
+            if (ImGui::Button("Delete") && selected) {
+                const uint32_t index = selected.Index();
+                table.Remove(index);
+                Select(table, table.At(index < table.RowCount() ? index : table.RowCount() - 1));
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::Button("Keep")) {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!table.CanUndo());
+
+        if (ImGui::Button("Undo")) {
+            table.Undo();
+        }
+
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Ctrl+Z");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!table.CanRedo());
+
+        if (ImGui::Button("Redo")) {
+            table.Redo();
+        }
+
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Ctrl+Y");
+
+        // Outside text fields, which have their own undo.
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput) {
+            if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) {
+                table.Undo();
+            } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) {
+                table.Redo();
+            }
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+
+        if (ImGui::Button(table.HasChanges() ? "Reload (drop edits)" : "Reload")) {
+            table.Reload();
+            s_saveError.clear();
+        }
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!table.HasChanges());
+
+        if (ImGui::Button("Save")) {
+            s_saveError.clear();
+            table.Save(&s_saveError);
+        }
+
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##filter", "filter rows", s_filter, sizeof(s_filter));
     }
 
     void DrawTable(Table& table) {
@@ -257,36 +304,32 @@ namespace {
         }
 
         if (table.DuplicateIds()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%u rows share an id with another row", table.DuplicateIds());
+            ImGui::TextColored(kWarning, "%u rows share an id with another row", table.DuplicateIds());
         }
 
         if (table.ChangedOnDisk()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The file changed on disk, and this table has unsaved edits.");
+            ImGui::TextColored(kWarning, "The file changed on disk, and this table has unsaved edits.");
         }
 
-        if (ImGui::Button(table.HasChanges() ? "Reload (drop edits)" : "Reload")) {
-            table.Reload();
-            s_saveError.clear();
-        }
-
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!table.HasChanges());
-
-        if (ImGui::Button("Save")) {
-            s_saveError.clear();
-            table.Save(&s_saveError);
-        }
-
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##filter", "filter rows", s_filter, sizeof(s_filter));
+        Row selected = SelectedRow(table);
+        DrawToolbar(table, selected);
+        selected = SelectedRow(table);
 
         if (!s_saveError.empty()) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", s_saveError.c_str());
         }
 
-        DrawRows(table);
+        ImGui::BeginChild("##grid", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, 0.0f), ImGuiChildFlags_ResizeX);
+        DrawRows(table, selected);
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("##form");
+        const Editor::Link link = Editor::DrawRowForm(table, selected);
+        ImGui::EndChild();
+
+        if (!link.table.empty()) {
+            Editor::OpenRowWindow(link.table, link.id);
+        }
     }
 }
 
@@ -297,7 +340,7 @@ namespace SXC::Data {
             return;
         }
 
-        ImGui::BeginChild("##tables", ImVec2(ImGui::GetFontSize() * 14.0f, 0.0f), ImGuiChildFlags_ResizeX | ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##tables", ImVec2(ImGui::GetFontSize() * 13.0f, 0.0f), ImGuiChildFlags_ResizeX | ImGuiChildFlags_Borders);
         DrawTableList();
         ImGui::EndChild();
         ImGui::SameLine();
@@ -311,5 +354,9 @@ namespace SXC::Data {
         }
 
         ImGui::EndChild();
+    }
+
+    void DrawWindows() {
+        Editor::DrawRowWindows();
     }
 }

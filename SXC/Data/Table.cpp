@@ -20,7 +20,12 @@ namespace {
     struct RowData {
         std::vector<uint32_t> cells;
         std::vector<std::string> texts;  // per column; used by string columns only
+        int32_t origin = -1;             // its serial in Impl::original; -1: added since the last load / save
     };
+
+    constexpr size_t kUndoSteps = 100;
+    // Edits closer together than this are one undo step (a dragged slider changes every frame).
+    constexpr DWORD kUndoGroupMs = 600;
 
     // What the watcher compares: the loose file's presence, time and size.
     struct Stamp {
@@ -147,6 +152,14 @@ namespace SXC::Data {
         bool indexDirty = true;
         uint32_t duplicates = 0;
         std::vector<std::pair<Listener, void*>> listeners;
+        // Each row's state in the file as loaded / last saved, by serial (Revert). Serials stay valid
+        // across saves, so a row brought back by undo still finds its own.
+        std::unordered_map<int32_t, RowData> original;
+        int32_t nextSerial = 0;
+        std::vector<RowData> committed;              // the rows before the current edit group
+        std::vector<std::vector<RowData>> undo;
+        std::vector<std::vector<RowData>> redo;
+        DWORD lastEdit = 0;
 
         Impl(Table* table, Schema&& from) : self(table), schema(std::move(from)) {
             for (size_t i = 0; i < schema.FieldCount(); i++) {
@@ -410,6 +423,9 @@ namespace SXC::Data {
             changes = false;
             changedOnDisk = false;
             stamp = StampOf(path);
+            Baseline(false);
+            // A row saved and edited again since counts from the saved state.
+            lastEdit = 0;
             status = Format("%zu rows, saved to the loose file", rows.size());
             return true;
         }
@@ -440,7 +456,41 @@ namespace SXC::Data {
             self->Reload();
         }
 
-        void Edited() {
+        // A new baseline: the file as it is now (after loading or saving). History starts over on load.
+        void Baseline(bool loaded) {
+            if (loaded) {
+                original.clear();
+                undo.clear();
+                redo.clear();
+            }
+
+            for (RowData& row : rows) {
+                if (loaded || row.origin < 0) {
+                    row.origin = nextSerial++;
+                }
+
+                original[row.origin] = row;
+            }
+
+            committed = rows;
+        }
+
+        // `step`: always a new undo step (rows added, removed); otherwise edits in quick succession
+        // join the current one.
+        void Edited(bool step = false) {
+            const DWORD now = GetTickCount();
+
+            if (step || now - lastEdit > kUndoGroupMs) {
+                undo.push_back(committed);
+                redo.clear();
+
+                if (undo.size() > kUndoSteps) {
+                    undo.erase(undo.begin());
+                }
+            }
+
+            lastEdit = step ? 0 : now;
+            committed = rows;
             changes = true;
             indexDirty = true;
             generation++;
@@ -631,7 +681,7 @@ namespace SXC::Data {
         RowData row = m_impl->NewRow();
         row.cells[0] = m_impl->NextId();
         m_impl->rows.push_back(std::move(row));
-        m_impl->Edited();
+        m_impl->Edited(true);
         return Row(this, RowCount() - 1);
     }
 
@@ -642,8 +692,9 @@ namespace SXC::Data {
 
         RowData row = m_impl->rows[index];
         row.cells[0] = m_impl->NextId();
+        row.origin = -1;
         m_impl->rows.insert(m_impl->rows.begin() + index + 1, std::move(row));
-        m_impl->Edited();
+        m_impl->Edited(true);
         return Row(this, index + 1);
     }
 
@@ -653,7 +704,69 @@ namespace SXC::Data {
         }
 
         m_impl->rows.erase(m_impl->rows.begin() + index);
-        m_impl->Edited();
+        m_impl->Edited(true);
+    }
+
+    bool Table::Revert(uint32_t index) {
+        if (index >= RowCount()) {
+            return false;
+        }
+
+        auto found = m_impl->original.find(m_impl->rows[index].origin);
+
+        if (found == m_impl->original.end()) {
+            m_impl->rows.erase(m_impl->rows.begin() + index);
+            m_impl->Edited(true);
+            return false;
+        }
+
+        m_impl->rows[index] = found->second;
+        m_impl->Edited(true);
+        return true;
+    }
+
+    bool Table::CanUndo() const {
+        return !m_impl->undo.empty();
+    }
+
+    bool Table::CanRedo() const {
+        return !m_impl->redo.empty();
+    }
+
+    void Table::Undo() {
+        Impl& impl = *m_impl;
+
+        if (impl.undo.empty()) {
+            return;
+        }
+
+        impl.redo.push_back(impl.rows);
+        impl.rows = impl.undo.back();
+        impl.undo.pop_back();
+        impl.committed = impl.rows;
+        impl.lastEdit = 0;
+        impl.changes = true;
+        impl.indexDirty = true;
+        impl.generation++;
+        impl.Notify(Change::Edited);
+    }
+
+    void Table::Redo() {
+        Impl& impl = *m_impl;
+
+        if (impl.redo.empty()) {
+            return;
+        }
+
+        impl.undo.push_back(impl.rows);
+        impl.rows = impl.redo.back();
+        impl.redo.pop_back();
+        impl.committed = impl.rows;
+        impl.lastEdit = 0;
+        impl.changes = true;
+        impl.indexDirty = true;
+        impl.generation++;
+        impl.Notify(Change::Edited);
     }
 
     void Table::Touch() {
@@ -674,6 +787,7 @@ namespace SXC::Data {
 
     void Table::Reload() {
         m_impl->Load();
+        m_impl->Baseline(true);
         m_impl->changes = false;
         m_impl->changedOnDisk = false;
         m_impl->generation++;

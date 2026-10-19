@@ -356,7 +356,7 @@ namespace {
     }
 
     void DrawDataView() {
-        ImGui::SetNextWindowSize(ImVec2(900.0f, 500.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(1200.0f, 650.0f), ImGuiCond_FirstUseEver);
 
         if (ImGui::Begin("Data##SxcData")) {
             SXC::Data::DrawBrowser();
@@ -454,6 +454,7 @@ namespace {
         }
 
         DrawQuickStrip();
+        SXC::Data::DrawWindows();
 
         if (s_showDemo) {
             ImGui::ShowDemoWindow(&s_showDemo);
