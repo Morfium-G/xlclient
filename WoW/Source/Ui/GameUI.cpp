@@ -1,4 +1,5 @@
 #include "GameUI.h"
+#include "SXC/World/World.h"  // SXC:
 #include "WoW/Source/DB/Rec/FileDataRec.h"
 #include "WoW/Source/DB/Rec/MovieFileDataRec.h"
 #include "WoW/Source/DB/Rec/MovieRec.h"
@@ -6641,7 +6642,9 @@ int32_t CGGameUI::MessageHandler(void* param, NETMESSAGE msgId, uint32_t time, C
                 soundKitId = rec->m_ambienceID;
             }
 
-            World::s_weather->SetType(type, intensity, rec, abrupt == 0, transition);
+            if (!SXC::WorldApi::HoldServerWeather(type, intensity, rec, abrupt == 0, transition)) {  // SXC: a test weather holds the server's
+                World::s_weather->SetType(type, intensity, rec, abrupt == 0, transition);
+            }
 
             if (soundKitId <= 0) {
                 soundKitId = -1;
