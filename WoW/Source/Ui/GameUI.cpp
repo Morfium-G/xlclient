@@ -6642,15 +6642,15 @@ int32_t CGGameUI::MessageHandler(void* param, NETMESSAGE msgId, uint32_t time, C
                 soundKitId = rec->m_ambienceID;
             }
 
-            if (!SXC::WorldApi::HoldServerWeather(type, intensity, rec, abrupt == 0, transition)) {  // SXC: a test weather holds the server's
-                World::s_weather->SetType(type, intensity, rec, abrupt == 0, transition);
-            }
-
             if (soundKitId <= 0) {
                 soundKitId = -1;
             }
 
-            SI2::SetWeatherKitID(soundKitId);
+            if (!SXC::WorldApi::HoldServerWeather(type, intensity, rec, abrupt == 0, transition, soundKitId)) {  // SXC: a test weather holds the server's
+                World::s_weather->SetType(type, intensity, rec, abrupt == 0, transition);
+                SI2::SetWeatherKitID(soundKitId);
+            }
+
             ConsolePrintf("Weather changed to %d, intensity %f\n", type, intensity);
             return 1;
         }

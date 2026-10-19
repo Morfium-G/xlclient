@@ -16,6 +16,8 @@
 #include "WoW/Source/DB/Rec/AreaTableRec.h"
 #include "WoW/Source/DB/Rec/GroundEffectTextureRec.h"
 #include "WoW/Source/DB/Rec/LiquidTypeRec.h"
+#include "WoW/Source/DB/Rec/WeatherRec.h"
+#include "WoW/Source/SoundInterface/SoundInterface2.h"
 #include "WoW/Source/WorldClient/MapArea.h"
 #include "WoW/Source/WorldClient/MapChunk.h"
 #include "WoW/Source/WorldClient/Types.h"
@@ -41,17 +43,49 @@ namespace {
         const WeatherRec* rec = nullptr;
         bool immediate = true;
         float transition = 1.0f;
+        int32_t soundKit = -1;
     };
 
     ServerWeather s_serverWeather;
     int32_t s_testType = -1;
     float s_testIntensity = 0.0f;
 
+    // A Weather.dbc row for the test, so it has the stock look and ambience (the rain's sound with
+    // rain): the rows of the type in ID order run light .. heavy, the intensity picks among them.
+    const WeatherRec* TestRec(int32_t type, float intensity) {
+        const WeatherRec* rows[16];
+        int32_t count = 0;
+
+        for (int32_t i = 0; i < g_weatherDB.m_numRecords && count < 16; i++) {
+            const WeatherRec* rec = g_weatherDB.GetRecordByIndex(i);
+
+            if (rec && rec->m_effectType == type) {
+                int32_t at = count++;
+
+                while (at > 0 && rows[at - 1]->m_id > rec->m_id) {
+                    rows[at] = rows[at - 1];
+                    at--;
+                }
+
+                rows[at] = rec;
+            }
+        }
+
+        if (!count) {
+            return nullptr;
+        }
+
+        const int32_t pick = static_cast<int32_t>(intensity * count);
+        return rows[pick < 0 ? 0 : (pick >= count ? count - 1 : pick)];
+    }
+
     void ApplyTest() {
         if (Weather* weather = ::World::s_weather) {
             // The snapshot's intensity is past the engine's knee: give it back the same way.
             const float raw = s_testIntensity <= 0.0f ? 0.0f : kWeatherKnee + (1.0f - kWeatherKnee) * (s_testIntensity > 1.0f ? 1.0f : s_testIntensity);
-            weather->SetType(static_cast<uint32_t>(s_testType), s_testType ? raw : 0.0f, nullptr, true, 1.0f);
+            const WeatherRec* rec = s_testType > 0 ? TestRec(s_testType, s_testIntensity) : nullptr;
+            weather->SetType(static_cast<uint32_t>(s_testType), s_testType ? raw : 0.0f, rec, true, rec ? rec->m_transitionSkyBox : 1.0f);
+            SI2::SetWeatherKitID(rec && rec->m_ambienceID > 0 ? rec->m_ambienceID : -1);
         }
     }
 
@@ -90,8 +124,10 @@ namespace {
 
         if (s_serverWeather.known) {
             weather->SetType(s_serverWeather.type, s_serverWeather.intensity, s_serverWeather.rec, true, s_serverWeather.transition);
+            SI2::SetWeatherKitID(s_serverWeather.soundKit);
         } else {
             weather->SetType(0, 0.0f, nullptr, true, 1.0f);
+            SI2::SetWeatherKitID(-1);
         }
     }
 
@@ -512,8 +548,8 @@ namespace SXC::WorldApi {
         return &s_api;
     }
 
-    bool HoldServerWeather(uint32_t type, float intensity, const WeatherRec* rec, bool immediate, float transition) {
-        s_serverWeather = ServerWeather{ true, type, intensity, rec, immediate, transition };
+    bool HoldServerWeather(uint32_t type, float intensity, const WeatherRec* rec, bool immediate, float transition, int32_t soundKitId) {
+        s_serverWeather = ServerWeather{ true, type, intensity, rec, immediate, transition, soundKitId };
         return s_testType >= 0;
     }
 }
