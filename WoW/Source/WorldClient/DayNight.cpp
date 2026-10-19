@@ -32,6 +32,7 @@
 #include "WoW/Source/WorldClient/WorldParam.h"
 #include "Engine/Source/Gxu/Gxu.h"
 #include "WoW/Source/Ui/WorldFrame.h"
+#include "SXC/Sky/Sky.h"  // SXC:
 
 // STATIC: 0x00AF4C20
 static C2Vector s_starFadeTable[4] = { C2Vector(0.125f, 1.0f), C2Vector(0.1875f, 0.0f), C2Vector(0.9375f, 0.0f), C2Vector(1.0f, 1.0f) };
@@ -1842,7 +1843,7 @@ void DayNight::RenderSky(CPortalView* view) {
         s_skyScene->AdvanceTime(elapsed);
         s_skySceneTimeMs += elapsed;
 
-        int32_t minutes = g_clientGameTime.GetHourAndMinutes();
+        int32_t minutes = SXC::Sky::SkyboxMinutes(g_clientGameTime.GetHourAndMinutes());  // SXC: the sky's time
 
         for (int32_t i = 0; i < 3; i++) {
             DayNight::SyncSkyAnimWithTime(info.m_blendSkybox[i], minutes);
@@ -2836,6 +2837,7 @@ void DayNight::UpdateLighting() {
     DayNight::SetColors();
     DayNight::SetDirection();
     DayNight::SetPlanets();
+    SXC::Sky::Lighting();  // SXC: light, glares and skyboxes from an sxc.sky provider
 }
 
 // VERIFY: dbc89d6c auto
@@ -2994,6 +2996,7 @@ void DayNight::DNGlare::Update(float deltaSec) {
 // VERIFY: 40579330 manual
 // OFFSET: 0x009AC400
 void DayNight::DNGlare::Render() {
+    if (SXC::Sky::GlareHidden(this)) { return; }  // SXC: an sxc.sky provider hid it this frame
     if (!DayNight::GlareBase::m_masterEnable || !this->m_enable || !this->m_color.a) {
         return;
     }

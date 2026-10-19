@@ -1,6 +1,7 @@
 #include "GameTime.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Sky/Sky.h"  // SXC:
 
 // STATIC: 0x00D37F98
 CGameTime g_clientGameTime;
@@ -62,6 +63,7 @@ CGameTime::CGameTime() {
 // VERIFY: d1c1b754 auto
 // OFFSET: 0x004C9850
 bool CGameTime::IsDaytime() {
+    if (bool daytime; this == &g_clientGameTime && SXC::Sky::IsDaytime(daytime)) { return daytime; }  // SXC: the sky's time
     CGameTime time;
     time.SetHourAndMinutes(this->GetHourAndMinutes());
     time.SetDate(0, 0, 0);

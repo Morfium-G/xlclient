@@ -89,6 +89,7 @@
 #include <cmath>
 #include "WoW/Source/Ui/SpellBookFrame.h"
 #include "WarcraftXL/Seams.h"
+#include "SXC/Sky/Sky.h"  // SXC:
 
 // STATIC: 0x009F9864
 static const uint32_t s_skinCursorModes[2] = { 21, 20 };
@@ -1586,6 +1587,8 @@ void CGWorldFrame::UpdateDayNight(float deltaSec) {
         info->m_dayProgression = g_clientGameTime.GameTimeGetDayProgression();
         info->m_day = static_cast<float>(g_clientGameTime.GetDaysSinceEpoch());
     }
+
+    SXC::Sky::Time(info);  // SXC: the sky's time (a provider of sxc.sky may pin or shift it)
 
     MapRec* map = g_mapDB.GetRecord(World::QueryMapId());
 

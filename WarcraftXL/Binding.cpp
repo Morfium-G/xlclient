@@ -222,10 +222,19 @@ namespace WarcraftXL::Binding {
         return type > LUA_TNIL ? WXL_TRUE : WXL_FALSE;
     }
 
+    // SXC: the script engine only calls C functions inside the executable (OsValidateFunctionPointer in
+    // ldo.c); the runtime's native lives in WarcraftXL.dll. So Lua gets this trampoline, with the native
+    // as upvalue 2; upvalue 1 stays the slot, which the native reads through script_closure_slot.
+    int ScriptTrampoline(lua_State* L) {
+        const auto fn = reinterpret_cast<wxl_script_native_fn>(lua_touserdata(L, lua_upvalueindex(2)));
+        return fn ? fn(L) : 0;
+    }
+
     void WXL_CALL script_set_global_closure(void* state, const char* name, wxl_script_native_fn fn, uint32_t slot) {
         lua_State* L = State(state);
         lua_pushnumber(L, static_cast<lua_Number>(slot));
-        lua_pushcclosure(L, reinterpret_cast<lua_CFunction>(fn), 1);
+        lua_pushlightuserdata(L, reinterpret_cast<void*>(fn));     // SXC:
+        lua_pushcclosure(L, &ScriptTrampoline, 2);                 // SXC: was the native itself, 1 upvalue
         lua_setfield(L, LUA_GLOBALSINDEX, name);
     }
 

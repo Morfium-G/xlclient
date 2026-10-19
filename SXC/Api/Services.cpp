@@ -4,6 +4,8 @@
 #include "SXC/Api/sxc_data.h"
 #include "SXC/Api/sxc_settings.h"
 #include "SXC/Api/sxc_ui.h"
+#include "SXC/Api/sxc_sky.h"
+#include "SXC/Api/sxc_world.h"
 
 #include <cstring>
 #include <memory>
@@ -13,6 +15,14 @@
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 #include "SXC/Ui/Ui.h"
+
+namespace SXC::WorldApi {
+    const sxc_world_api* Api();
+}
+
+namespace SXC::Sky {
+    const sxc_sky_api* Api();
+}
 
 namespace {
     using namespace SXC;
@@ -359,6 +369,14 @@ extern "C" __declspec(dllexport) const void* WXL_CALL sxc_get_service(const char
 
     if (strcmp(name, SXC_UI_SERVICE) == 0 && version == SXC_UI_SERVICE_VERSION) {
         return &s_ui;
+    }
+
+    if (strcmp(name, SXC_WORLD_SERVICE) == 0 && version == SXC_WORLD_SERVICE_VERSION) {
+        return SXC::WorldApi::Api();
+    }
+
+    if (strcmp(name, SXC_SKY_SERVICE) == 0 && version == SXC_SKY_SERVICE_VERSION) {
+        return SXC::Sky::Api();
     }
 
     return nullptr;
