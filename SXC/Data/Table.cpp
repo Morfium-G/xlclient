@@ -807,6 +807,9 @@ namespace SXC::Data {
 
     // --- the registry --------------------------------------------------------------------------------
 
+    // Files can be read once the client's archives are up (Start).
+    static bool s_started;
+
     Table* Register(Schema schema) {
         if (Table* existing = Get(schema.Name().c_str())) {
             return existing;
@@ -814,8 +817,24 @@ namespace SXC::Data {
 
         Tables().push_back(std::unique_ptr<Table>(new Table(std::move(schema))));
         Table* table = Tables().back().get();
-        table->Reload();
+
+        if (s_started) {
+            table->Reload();
+        }
+
         return table;
+    }
+
+    void Start() {
+        if (s_started) {
+            return;
+        }
+
+        s_started = true;
+
+        for (const std::unique_ptr<Table>& table : Tables()) {
+            table->Reload();
+        }
     }
 
     Table* Get(const char* name) {

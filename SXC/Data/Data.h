@@ -119,9 +119,12 @@ namespace SXC::Data {
         std::unique_ptr<Impl> m_impl;
     };
 
-    // Registers a table and loads it. A name registered before returns that table (the first schema
-    // stays). The table lives until the client exits.
+    // Registers a table and loads it (a table registered before Start loads then). A name registered
+    // before returns that table (the first schema stays). The table lives until the client exits.
     Table* Register(Schema schema);
+
+    // The client's archives are up: load what was registered so far (SXC::Startup).
+    void Start();
     Table* Get(const char* name);
     size_t TableCount();
     Table* TableAt(size_t index);

@@ -2,8 +2,11 @@
 
 #include "Engine/Source/Event/Event.h"
 #include "SXC/Data/Data.h"
-#include "SXC/ImmersiveAzeroth/Tables.h"
 #include "SXC/Settings/Settings.h"
+
+namespace SXC::Api {
+    void Keep();
+}
 
 namespace {
     // Every frame, in the glue screens as in the world, whatever the renderer.
@@ -23,9 +26,9 @@ namespace SXC {
         }
 
         s_started = true;
-        // Modules compiled into the client. Explicit calls: SXC is a static library, and an object
-        // file nothing refers to would be left out of the link, its static registrations with it.
-        ImmersiveAzeroth::RegisterTables();
+        // The services mods reach through the sxc.bridge mod (SXC/Api): keep their object linked.
+        Api::Keep();
+        Data::Start();
         EventRegister(EVENT_ID_IDLE, Idle);
     }
 }
