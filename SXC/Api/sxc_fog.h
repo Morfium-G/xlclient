@@ -31,12 +31,16 @@ typedef struct sxc_fog_field
     uint32_t     size;      ///< cells per side, 1 .. SXC_FOG_MAX_FIELD
     float        cell_size; ///< yards
     int32_t      first_i, first_j;
-    /// Per cell: extinction per yard at the layer's base (0 = no fog), the base (world z), the
-    /// thickness (yards: it thins to nothing there), patchiness 0..1 (how much the noise breaks it up).
+    /// Per cell: extinction per yard at the layer's floor (0 = no fog), the floor (world z: full below
+    /// it), the thickness (yards: above the floor it thins by e over this height), patchiness 0..1 (how
+    /// much the noise breaks it up).
     const float* light;
     /// Per cell: extinction per yard (0 = no pool), the top (world z; flat), the soft band under the
     /// top (yards), unused. May be null.
     const float* pool;
+    /// Per cell: the fog's colour there (rgb, may exceed 1), unused. May be null: the look's colour
+    /// everywhere. Multiplied by the look's brightness.
+    const float* colour;
 } sxc_fog_field;
 
 typedef struct sxc_fog_look
@@ -55,6 +59,9 @@ typedef struct sxc_fog_look
     float    haze_base;       ///< world z
     float    haze_thickness;  ///< yards: the haze thins by e over this height
     int32_t  debug;           ///< 1: the fog drawn magenta
+    float    step_length;     ///< yards: the fog is integrated in steps this long near the camera (smaller: smoother thin layers, more GPU); 0 = 0.5
+    int32_t  method;          ///< 0 march every pixel's own ray (sharp thin layers), 1 the froxel volume (cheaper, coarse across the screen)
+    int32_t  max_steps;       ///< per pixel: the most steps a ray takes (steps grow with distance); 0 = 160
 } sxc_fog_look;
 
 typedef struct sxc_fog_api
@@ -72,6 +79,10 @@ typedef struct sxc_fog_api
 
     /// One line: what the renderer did last frame, or why not. Valid until the next call.
     const char*(WXL_CALL* status)(void);
+
+    /// The place's stock fog colour this frame (what the sky's distance fog has; it follows the time
+    /// of day), rgb 0..1.
+    void(WXL_CALL* stock_colour)(float* out_rgb);
 } sxc_fog_api;
 
 #ifdef __cplusplus

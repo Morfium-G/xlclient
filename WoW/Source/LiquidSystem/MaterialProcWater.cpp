@@ -4,6 +4,7 @@
 #include "Engine/Source/Model2/M2Light.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Fog/Fog.h"  // SXC:
 
 // STATIC: 0x00D4505C
 CDataAllocator Liquid::s_procWaterFFPAllocator(sizeof(Liquid::CMaterialProcWaterFFP), 8);
@@ -219,7 +220,7 @@ void Liquid::CMaterialProcWater::Render(Liquid::IEnvironment* environment, Liqui
     g_theGxDevicePtr->PrimIndexPtr(indexBuf);
 
     g_theGxDevicePtr->RsSet(GxRs_Culling, 0);
-    g_theGxDevicePtr->RsSet(GxRs_DepthWrite, 0);
+    g_theGxDevicePtr->RsSet(GxRs_DepthWrite, SXC::Fog::WaterWritesDepth() ? 1 : 0);  // SXC: the volumetric fog lies on the water surface
     g_theGxDevicePtr->RsSet(GxRs_BlendingMode, 2);
     GxUpdateAlphaRef(GxRs_AlphaRef);
     g_theGxDevicePtr->RsSet(GxRs_Fog, 1);

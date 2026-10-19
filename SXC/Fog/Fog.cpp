@@ -3,6 +3,7 @@
 #include "SXC/Fog/Fog.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <vector>
 #include "SXC/Api/sxc_fog.h"
@@ -22,7 +23,8 @@ namespace {
     bool s_haveLook = false;
 
     // The field, as the renderer takes it (half floats), and its window.
-    std::vector<uint16_t> s_light, s_pool;
+    std::vector<uint16_t> s_light, s_pool, s_tint;
+    bool s_haveTint = false;
     uint32_t s_size = 0;
     float s_cellSize = 2.0f;
     int32_t s_firstI = 0, s_firstJ = 0;
@@ -89,10 +91,12 @@ namespace {
     }
 
     void WXL_CALL SetField(const sxc_fog_field* field) {
-        if (!field || field->struct_size < sizeof(sxc_fog_field) || !field->light || field->size == 0 || field->size > SXC_FOG_MAX_FIELD) {
+        if (!field || field->struct_size < offsetof(sxc_fog_field, colour) || !field->light || field->size == 0 || field->size > SXC_FOG_MAX_FIELD) {
             s_size = 0;
             s_light.clear();
             s_pool.clear();
+            s_tint.clear();
+            s_haveTint = false;
             s_version++;
             return;
         }
@@ -100,6 +104,15 @@ namespace {
         const size_t cells = static_cast<size_t>(field->size) * field->size;
         Convert(field->light, s_light, cells);
         Convert(field->pool, s_pool, cells); // zeros without pools
+        // The colour per cell (appended to the struct): without it, the look's colour everywhere.
+        const float* tint = field->struct_size >= sizeof(sxc_fog_field) ? field->colour : nullptr;
+        s_haveTint = tint != nullptr;
+
+        if (s_haveTint) {
+            Convert(tint, s_tint, cells);
+        } else {
+            s_tint.clear();
+        }
         s_size = field->size;
         s_cellSize = field->cell_size > 0.01f ? field->cell_size : 0.01f;
         s_firstI = field->first_i;
@@ -108,12 +121,13 @@ namespace {
     }
 
     void WXL_CALL SetLook(const sxc_fog_look* look) {
-        if (!look || look->struct_size < sizeof(sxc_fog_look)) {
+        if (!look || look->struct_size < offsetof(sxc_fog_look, step_length)) {
             s_haveLook = false;
             return;
         }
 
-        s_look = *look;
+        s_look = sxc_fog_look{};
+        std::memcpy(&s_look, look, look->struct_size < sizeof(sxc_fog_look) ? look->struct_size : sizeof(sxc_fog_look));
         s_haveLook = true;
     }
 
@@ -129,7 +143,18 @@ namespace {
         return s_status ? s_status() : "";
     }
 
-    const sxc_fog_api s_api = { sizeof(sxc_fog_api), Available, SetField, SetLook, Status };
+    void WXL_CALL StockColour(float* out) {
+        if (!out) {
+            return;
+        }
+
+        const CImVector& stock = DayNight::GetInfo()->m_fog.m_color;
+        out[0] = stock.r / 255.0f;
+        out[1] = stock.g / 255.0f;
+        out[2] = stock.b / 255.0f;
+    }
+
+    const sxc_fog_api s_api = { sizeof(sxc_fog_api), Available, SetField, SetLook, Status, StockColour };
 }
 
 namespace SXC::Fog {
@@ -141,6 +166,10 @@ namespace SXC::Fog {
         s_renderer = renderer;
         s_status = status;
         s_version++; // a new device holds no field yet
+    }
+
+    bool WaterWritesDepth() {
+        return s_renderer && s_haveLook && s_look.enabled && s_size > 0;
     }
 
     void Composite() {
@@ -187,6 +216,8 @@ namespace SXC::Fog {
             in.firstJ = s_firstJ;
             in.light = s_light.data();
             in.pool = s_pool.data();
+            in.tint = s_haveTint ? s_tint.data() : nullptr;
+            in.tintBrightness = s_look.brightness;
         }
 
         in.fieldVersion = s_version;
@@ -200,6 +231,9 @@ namespace SXC::Fog {
         in.hazeBase = s_look.haze_base;
         in.hazeThickness = s_look.haze_thickness;
         in.debug = s_look.debug;
+        in.stepLength = s_look.step_length > 0.0f ? s_look.step_length : 0.5f;
+        in.perPixel = s_look.method == 0;
+        in.maxSteps = s_look.max_steps > 0 ? s_look.max_steps : 160;
         s_renderer(in);
     }
 }

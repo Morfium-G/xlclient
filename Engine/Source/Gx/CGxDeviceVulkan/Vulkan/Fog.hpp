@@ -30,18 +30,23 @@ namespace gxvk::vk::fog
         int32_t         firstI       = 0, firstJ = 0;
         const uint16_t* light        = nullptr; ///< density (1/yd), layer base (world z), thickness (yd), patchiness
         const uint16_t* pool         = nullptr; ///< density (1/yd), pool top (world z), soft top (yd), 0
+        const uint16_t* tint         = nullptr; ///< the fog's colour per cell (rgb, x tintBrightness), 0; null: colour everywhere
+        float           tintBrightness = 1.0f;
         uint32_t        fieldVersion = 0;
 
         float densityScale  = 1.0f;
         float noiseAmount   = 0.6f;
         float noiseTile     = 64.0f;   ///< yd
         float drift[2]      = {};      ///< yd the patches have drifted so far
+        float stepLength    = 0.5f;    ///< yd: the slices are integrated in steps this long (at most 32 per slice)
         float nearDistance  = 0.5f;    ///< yd
         float farDistance   = 250.0f;  ///< yd
         float hazeDensity   = 0.0f;    ///< per yd at the haze's base
         float hazeBase      = 0.0f;    ///< world z
         float hazeThickness = 30.0f;   ///< yd: e-folding height above the base
         int   debug         = 0;       ///< 1: magenta
+        bool  perPixel      = true;    ///< march each pixel's ray (sharp thin layers); false: the froxel volume
+        int   maxSteps      = 160;     ///< per pixel: the most steps a ray takes
     };
 
     /// Records the fog over the current target. False when nothing was drawn; Status() says why.

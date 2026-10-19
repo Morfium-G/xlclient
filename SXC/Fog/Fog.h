@@ -18,6 +18,8 @@ namespace SXC::Fog {
         int32_t firstI = 0, firstJ = 0;
         const uint16_t* light = nullptr;
         const uint16_t* pool = nullptr;
+        const uint16_t* tint = nullptr;  // the colour per cell (rgb, x tintBrightness); null: `colour` everywhere
+        float tintBrightness = 1.0f;
         uint32_t fieldVersion = 0;
 
         float densityScale = 1.0f;
@@ -30,6 +32,9 @@ namespace SXC::Fog {
         float hazeBase = 0.0f;
         float hazeThickness = 30.0f;
         int32_t debug = 0;
+        float stepLength = 0.5f; // yd: the steps near the camera
+        bool perPixel = true;    // march each pixel's ray; false: the froxel volume
+        int32_t maxSteps = 160;  // per pixel: the most steps a ray takes
     };
 
     // Draws the fog over the current target; false when nothing was drawn.
@@ -43,4 +48,8 @@ namespace SXC::Fog {
     // The seam: CGWorldFrame::OnWorldRender, after the opaque world and the water, before the
     // weather and the see-through models (camera above water only).
     void Composite();
+
+    // The procedural water's depth writes (MaterialProcWater): on while the fog draws a field, so the
+    // fog lies on the water's surface instead of reaching down to the lake bed (WXL did the same).
+    bool WaterWritesDepth();
 }

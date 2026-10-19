@@ -280,6 +280,8 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
     f.firstJ = in.firstJ;
     f.light = in.light;
     f.pool = in.pool;
+    f.tint = in.tint;
+    f.tintBrightness = in.tintBrightness;
     f.fieldVersion = in.fieldVersion;
     f.densityScale = in.densityScale;
     f.noiseAmount = in.noiseAmount;
@@ -292,6 +294,9 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
     f.hazeBase = in.hazeBase;
     f.hazeThickness = in.hazeThickness;
     f.debug = in.debug;
+    f.stepLength = in.stepLength;
+    f.perPixel = in.perPixel;
+    f.maxSteps = in.maxSteps;
     return gxvk::vk::fog::Record(f);
 }
 

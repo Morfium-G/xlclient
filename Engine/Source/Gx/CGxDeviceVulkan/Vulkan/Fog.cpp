@@ -27,7 +27,7 @@ namespace
     using gxvk::vk::ResultName;
 
     constexpr uint32_t kSlots   = frame::kFramesInFlight;
-    constexpr uint32_t kColumnsX = 160, kColumnsY = 90, kSlices = 64; // Fog.glsl's kSlices
+    constexpr uint32_t kColumnsX = 160, kColumnsY = 90, kSlices = 128; // Fog.glsl's kSlices
     constexpr uint32_t kMaxField = 512;
     constexpr VkFormat kVolumeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -43,6 +43,7 @@ namespace
         float noise[4];
         float misc[4];
         float haze[4];
+        float march[4];
     };
 
     /// An image this module owns, with its memory and the layout it is in.
@@ -82,7 +83,8 @@ namespace
         VkPipeline   composite = VK_NULL_HANDLE;
 
         Image    volume;
-        Image    fieldLight, fieldPool; ///< the near field's two layers
+        Image    fieldLight, fieldPool, fieldTint; ///< the near field's layers and colours
+        bool     tintPresent = false;
         uint32_t fieldVersion = 0;     ///< what the field images hold
         bool     fieldPresent = false;
 
@@ -217,12 +219,13 @@ namespace
         // One set for both pipelines: 0 the parameters, 1 and 2 the near field, 3 the volume to
         // write, 4 the scene depth, 5 the volume to read.
         const VkShaderStageFlags both = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-        VkDescriptorSetLayoutBinding bindings[6] = {};
-        const VkDescriptorType types[6] = {
+        VkDescriptorSetLayoutBinding bindings[7] = {};
+        const VkDescriptorType types[7] = {
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         };
-        for (uint32_t i = 0; i < 6; ++i)
+        for (uint32_t i = 0; i < 7; ++i)
         {
             bindings[i].binding         = i;
             bindings[i].descriptorType  = types[i];
@@ -231,7 +234,7 @@ namespace
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayout.bindingCount = 6;
+        setLayout.bindingCount = 7;
         setLayout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
@@ -245,7 +248,7 @@ namespace
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = 4 * kSlots;
+        sizes[1].descriptorCount = 5 * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[2].descriptorCount = kSlots;
         VkDescriptorPoolCreateInfo pool = {};
@@ -289,7 +292,8 @@ namespace
         // The near field starts as 1 x 1 "no fog" until a field arrives.
         if (!CreateImage(VK_IMAGE_TYPE_3D, kColumnsX, kColumnsY, kSlices, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, s.volume)
             || !CreateImage(VK_IMAGE_TYPE_2D, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, s.fieldLight)
-            || !CreateImage(VK_IMAGE_TYPE_2D, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, s.fieldPool))
+            || !CreateImage(VK_IMAGE_TYPE_2D, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, s.fieldPool)
+            || !CreateImage(VK_IMAGE_TYPE_2D, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, s.fieldTint))
             return false;
 
         s.ready = true;
@@ -427,7 +431,7 @@ namespace
             // Once per field size (normally once a session): the frames in flight may still read the
             // old images, so the device is let finish first. Nothing of this frame names them yet.
             s.dapi->DeviceWaitIdle(s.device);
-            Image* layers[2] = { &s.fieldLight, &s.fieldPool };
+            Image* layers[3] = { &s.fieldLight, &s.fieldPool, &s.fieldTint };
             for (Image* img : layers)
             {
                 DestroyImage(*img);
@@ -439,12 +443,13 @@ namespace
         VkBuffer     buffer = VK_NULL_HANDLE;
         VkDeviceSize offset = 0;
         void*        mapped = nullptr;
-        if (!frame::Stage(bytes * 2, buffer, offset, mapped)) return false;
-        std::memcpy(mapped, f.light, static_cast<size_t>(bytes));
-        std::memcpy(static_cast<uint8_t*>(mapped) + bytes, f.pool, static_cast<size_t>(bytes));
+        const uint16_t* sources[3] = { f.light, f.pool, f.tint };
+        const uint32_t  count      = f.tint ? 3 : 2;
+        if (!frame::Stage(bytes * count, buffer, offset, mapped)) return false;
+        for (uint32_t i = 0; i < count; ++i) std::memcpy(static_cast<uint8_t*>(mapped) + bytes * i, sources[i], static_cast<size_t>(bytes));
 
-        Image* layers[2] = { &s.fieldLight, &s.fieldPool };
-        for (uint32_t i = 0; i < 2; ++i)
+        Image* layers[3] = { &s.fieldLight, &s.fieldPool, &s.fieldTint };
+        for (uint32_t i = 0; i < count; ++i)
         {
             Image& img = *layers[i];
             Barrier(cmd, img.image, VK_IMAGE_ASPECT_COLOR_BIT, img.layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -463,13 +468,14 @@ namespace
 
         s.fieldVersion = f.fieldVersion;
         s.fieldPresent = true;
+        s.tintPresent  = f.tint != nullptr;
         return true;
     }
 
     /// The 1 x 1 placeholders hold nothing until first used: cleared to "no fog" once.
     void ReadyPlaceholders(VkCommandBuffer cmd)
     {
-        Image* layers[2] = { &s.fieldLight, &s.fieldPool };
+        Image* layers[3] = { &s.fieldLight, &s.fieldPool, &s.fieldTint };
         for (Image* img : layers)
         {
             if (img->layout != VK_IMAGE_LAYOUT_UNDEFINED) continue;
@@ -559,6 +565,7 @@ namespace gxvk::vk::fog
             SetStatus("skipped: the field could not be uploaded");
             return false;
         }
+        ReadyPlaceholders(cmd); // images remade for a new field size and not filled (no colours): cleared
 
         // The parameters, into this slot's buffer (its previous frame has completed).
         Slot& slot = s.slots[frame::Slot()];
@@ -577,6 +584,7 @@ namespace gxvk::vk::fog
         p.colour[0]   = f.colour[0];
         p.colour[1]   = f.colour[1];
         p.colour[2]   = f.colour[2];
+        p.colour[3]   = f.stepLength > 0.1f ? f.stepLength : 0.1f;
         p.field[0]    = f.cellSize;
         p.field[1]    = static_cast<float>(s.fieldPresent ? s.fieldLight.size : 1);
         p.field[2]    = static_cast<float>(f.firstI);
@@ -591,18 +599,24 @@ namespace gxvk::vk::fog
         p.misc[3]     = f.hazeDensity;
         p.haze[0]     = f.hazeBase;
         p.haze[1]     = f.hazeThickness;
+        p.haze[2]     = s.fieldPresent && s.tintPresent ? 1.0f : 0.0f;
+        p.haze[3]     = f.tintBrightness;
+        p.march[0]    = f.perPixel ? 1.0f : 0.0f;
+        p.march[1]    = 0.03f;  // per pixel: steps grow to 3% of their distance
+        p.march[2]    = static_cast<float>(f.maxSteps > 8 ? (f.maxSteps < 512 ? f.maxSteps : 512) : 8);
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkDescriptorImageInfo images[5] = {};
+        VkDescriptorImageInfo images[6] = {};
         images[0] = { s.linearRepeat, s.fieldLight.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         images[1] = { s.linearRepeat, s.fieldPool.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         images[2] = { VK_NULL_HANDLE, s.volume.view, VK_IMAGE_LAYOUT_GENERAL };
         images[3] = { s.nearestClamp, t.depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
         images[4] = { s.linearClamp, s.volume.view, VK_IMAGE_LAYOUT_GENERAL };
-        VkWriteDescriptorSet writes[6] = {};
-        for (uint32_t i = 0; i < 6; ++i)
+        images[5] = { s.linearRepeat, s.fieldTint.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet writes[7] = {};
+        for (uint32_t i = 0; i < 7; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = slot.set;
@@ -621,7 +635,9 @@ namespace gxvk::vk::fog
         writes[4].pImageInfo     = &images[3];
         writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[5].pImageInfo     = &images[4];
-        d.UpdateDescriptorSets(s.device, 6, writes, 0, nullptr);
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[6].pImageInfo     = &images[5];
+        d.UpdateDescriptorSets(s.device, 7, writes, 0, nullptr);
 
         // The volume: the last frame's composite has read it before this frame's compute writes it.
         Barrier(cmd, s.volume.image, VK_IMAGE_ASPECT_COLOR_BIT, s.volume.layout, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -629,7 +645,7 @@ namespace gxvk::vk::fog
         s.volume.layout = VK_IMAGE_LAYOUT_GENERAL;
         d.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.compute);
         d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.layout, 0, 1, &slot.set, 0, nullptr);
-        d.CmdDispatch(cmd, (kColumnsX + 7) / 8, (kColumnsY + 7) / 8, 1);
+        if (!f.perPixel) d.CmdDispatch(cmd, (kColumnsX + 7) / 8, (kColumnsY + 7) / 8, 1);  // per pixel: Fog.frag marches, the volume stays unused
 
         // The volume to the composite; the depth from attachment to read-only (the world's writes done).
         Barrier(cmd, s.volume.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -695,6 +711,7 @@ namespace gxvk::vk::fog
         DestroyImage(s.volume);
         DestroyImage(s.fieldLight);
         DestroyImage(s.fieldPool);
+        DestroyImage(s.fieldTint);
         for (Slot& slot : s.slots) memory::DestroyBuffer(slot.params);
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);
         if (s.linearRepeat != VK_NULL_HANDLE) d.DestroySampler(s.device, s.linearRepeat, nullptr);
