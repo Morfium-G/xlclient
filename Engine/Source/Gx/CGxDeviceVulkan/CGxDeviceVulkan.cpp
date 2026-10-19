@@ -9,6 +9,7 @@
 #include <new>
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Fog.hpp"  // SXC: volumetric fog
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Manifest.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
@@ -21,6 +22,7 @@
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Os/Error.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 
 namespace context   = gxvk::vk::context;
 namespace frame     = gxvk::vk::frame;
@@ -245,7 +247,52 @@ void CGxDeviceVulkan::ICreateDrawPath() {
 
     if (!this->m_drawPath) {
         CGxDevice::Log("CGxDeviceVulkan::ICreateDrawPath(): device memory, the textures, the shaders, the pipelines, the present pass or the queries could not be brought up (the lines above say why); nothing is drawn");
+    } else {
+        SXC::Fog::SetRenderer(&CGxDeviceVulkan::SxcFogRender, &gxvk::vk::fog::Status);  // SXC: volumetric fog
     }
+}
+
+// SXC: the volumetric fog over the current target (SXC/Fog/Fog.h), with this device's own view of the
+// draws: the view and native projection they're transformed with, the viewport they land in.
+bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+
+    if (!device || !device->m_drawPath) {
+        return false;
+    }
+
+    gxvk::vk::fog::Frame f;
+    VkRect2D scissor = {};
+
+    if (!device->IPlaceD3d(f.viewport, scissor)) {
+        return false;
+    }
+
+    const CGxMatrixStack& view = device->m_xforms[GxXform_View];
+    const C44Matrix viewProj = view.m_mtx[view.m_level] * device->m_projNative;
+    std::memcpy(f.viewProj, &viewProj, sizeof f.viewProj);
+    std::memcpy(f.origin, in.origin, sizeof f.origin);
+    f.seconds = in.seconds;
+    std::memcpy(f.colour, in.colour, sizeof f.colour);
+    f.fieldSize = in.fieldSize;
+    f.cellSize = in.cellSize;
+    f.firstI = in.firstI;
+    f.firstJ = in.firstJ;
+    f.light = in.light;
+    f.pool = in.pool;
+    f.fieldVersion = in.fieldVersion;
+    f.densityScale = in.densityScale;
+    f.noiseAmount = in.noiseAmount;
+    f.noiseTile = in.noiseTile;
+    f.drift[0] = in.drift[0];
+    f.drift[1] = in.drift[1];
+    f.nearDistance = in.nearDistance;
+    f.farDistance = in.farDistance;
+    f.hazeDensity = in.hazeDensity;
+    f.hazeBase = in.hazeBase;
+    f.hazeThickness = in.hazeThickness;
+    f.debug = in.debug;
+    return gxvk::vk::fog::Record(f);
 }
 
 // A bring-up that answered Retry at DeviceSetFormat: tried again from ScenePresent while the window
@@ -288,9 +335,11 @@ void CGxDeviceVulkan::IReleaseVulkanWindow() {
 // queries, the shader modules, the textures' table, device memory, the context, the manifest.
 void CGxDeviceVulkan::IDestroyVulkan() {
     this->ICursorDestroy();
+    SXC::Fog::SetRenderer(nullptr, nullptr);  // SXC: volumetric fog
     frame::ReleaseSwapchain();
     this->IReleasePools();
     this->IReleaseTextures();
+    gxvk::vk::fog::Shutdown();  // SXC: the device is idle (ReleaseSwapchain waited)
     frame::Destroy();
     pipelines::Shutdown();
     present::Shutdown();

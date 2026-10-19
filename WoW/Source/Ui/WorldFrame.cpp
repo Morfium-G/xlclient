@@ -1,4 +1,5 @@
 #include "WorldFrame.h"
+#include "SXC/Fog/Fog.h"  // SXC:
 #include "Engine/Source/Base/ConvertUTF.h"
 #include <cstring>
 #include <typeinfo>
@@ -1766,6 +1767,7 @@ void CGWorldFrame::OnWorldRender() {
     } else {
         scene->Draw(M2PASS_2);
         CWorldScene::RenderLiquidPass();
+        SXC::Fog::Composite();  // SXC: volumetric fog, over the opaque world and the water
         CWorldScene::RenderWeather();
         CWorldScene::RenderBarriers(this->m_elapsedSec);
         scene->Draw(M2PASS_1);

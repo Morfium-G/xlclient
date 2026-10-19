@@ -169,6 +169,10 @@ namespace gxvk::vk::pipelines
     /// memory::Shutdown().
     void Shutdown();
 
+    /// SXC: something else bound its own pipeline, sets and viewport on the main command buffer (an
+    /// effect between the engine's draws): the next draw binds everything again.
+    void ForgetBound();
+
     /**
      * Records one draw into an open render pass: the pipeline for the draw's key (built on first
      * use), the descriptor sets of its textures and constants, the vertex and index buffers, the

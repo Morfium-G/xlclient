@@ -135,6 +135,38 @@ namespace gxvk::vk::frame
     /// Whether a query is active on the open frame.
     bool QueryActive();
 
+    /// SXC: the current target as an effect drawn over it between the engine's draws sees it (the
+    /// volumetric fog): its colour (in SHADER_READ_ONLY_OPTIMAL) and its depth buffer (in
+    /// DEPTH_STENCIL_ATTACHMENT_OPTIMAL, written this session).
+    struct EffectTarget
+    {
+        VkCommandBuffer cmd        = nullptr;          ///< the main buffer, outside any pass
+        VkImageView     colour     = VK_NULL_HANDLE;   ///< a 2D view of the target (its layer)
+        VkFormat        format     = VK_FORMAT_UNDEFINED;
+        VkExtent2D      extent     = { 0, 0 };
+        VkImage         depth      = VK_NULL_HANDLE;
+        VkImageView     depthView  = VK_NULL_HANDLE;   ///< the depth aspect alone, sampleable
+        VkImageAspectFlags depthAspects = 0;           ///< every aspect of the depth image (for its barriers)
+        uint64_t        serial     = 0;                ///< the open frame's
+    };
+
+    /**
+     * SXC: ends the open pass and hands out the current target for an effect: the effect records
+     * its own work into `cmd` and leaves the colour in SHADER_READ_ONLY_OPTIMAL and the depth in
+     * DEPTH_STENCIL_ATTACHMENT_OPTIMAL, contents kept; the next Pass() resumes the target. The
+     * engine's draw path forgets what it had bound (pipelines::ForgetBound).
+     *
+     * @return bool ok : false when there is nothing to draw over yet (no pass on the target this
+     *         frame, a clear pending), a query is active, or the depth can't be sampled
+     */
+    bool BeginEffect(EffectTarget& out);
+
+    /// SXC: a framebuffer an effect made for this frame, destroyed once the frame completes.
+    void RetireFramebuffer(VkFramebuffer framebuffer, uint64_t lastUsed);
+
+    /// SXC: whether the depth buffers can be sampled (an effect needs it).
+    bool DepthSampled();
+
     /// Submits the open frame's work so far without presenting (the next call opens a new frame
     /// on the same targets, their contents kept): what a blocking query read needs.
     void Flush();

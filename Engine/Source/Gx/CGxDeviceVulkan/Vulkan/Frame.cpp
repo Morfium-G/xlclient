@@ -357,6 +357,44 @@ namespace gxvk::vk::frame
 
     bool QueryActive() { return s.open && s.queryActive; }
 
+    bool BeginEffect(EffectTarget& out)
+    {
+        if (!s.open || s.queryActive || s.clearColourPending || s.clearDepthPending) return false;
+        const texture::Image* image  = nullptr;
+        VkFormat              format = VK_FORMAT_UNDEFINED;
+        VkExtent2D            extent = { 0, 0 };
+        if (!TargetView(s.target, image, format, extent)) return false;
+        // Only over a target a pass has drawn into: the colour rests in its read layout, the depth
+        // holds this frame's geometry.
+        if (image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) return false;
+        const uint32_t fbi = FramebufferFor(s.target, format, extent);
+        if (fbi == UINT32_MAX) return false;
+        Framebuffer& fb    = s.fbs[fbi];
+        DepthBuffer& depth = s.depths[fb.depth];
+        if (!depth.initialised || depth.sampleView == VK_NULL_HANDLE || depth.lastUsed != s.serial) return false;
+        EndPass();
+        fb.lastUsed      = s.serial;
+        out.cmd          = s.slots[s.fi].cmd;
+        out.colour       = fb.view;
+        out.format       = format;
+        out.extent       = extent;
+        out.depth        = depth.image;
+        out.depthView    = depth.sampleView;
+        out.depthAspects = VK_IMAGE_ASPECT_DEPTH_BIT | (s.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u);
+        out.serial       = s.serial;
+        return true;
+    }
+
+    void RetireFramebuffer(VkFramebuffer framebuffer, uint64_t lastUsed)
+    {
+        if (framebuffer == VK_NULL_HANDLE || !s.dapi) return;
+        Retired e;
+        e.framebuffer = framebuffer;
+        Retire(e, lastUsed);
+    }
+
+    bool DepthSampled() { return s.depthSampled; }
+
     void Flush()
     {
         if (!s.open) return;

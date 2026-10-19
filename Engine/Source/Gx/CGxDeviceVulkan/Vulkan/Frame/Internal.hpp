@@ -110,6 +110,7 @@ namespace gxvk::vk::frame::detail
     {
         VkImage       image       = VK_NULL_HANDLE;
         VkImageView   view        = VK_NULL_HANDLE;
+        VkImageView   sampleView  = VK_NULL_HANDLE;   ///< SXC: the depth aspect alone, for an effect to sample; null when the format can't be sampled
         memory::Block block;
         VkExtent2D    extent      = { 0, 0 };
         bool          initialised = false;   ///< a pass has written it: later passes may LOAD it
@@ -156,6 +157,7 @@ namespace gxvk::vk::frame::detail
 
         // --- targets ----------------------------------------------------------------------------------
         VkFormat    depthFormat = VK_FORMAT_UNDEFINED;
+        bool        depthSampled = false;   ///< SXC: the depth format can be sampled (the buffers get SAMPLED usage and a sample view)
         PassSet     passes[kMaxPassFormats];
         uint32_t    passCount = 0;
         uint32_t    passGen   = 0;

@@ -8,6 +8,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Texture.hpp"
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Storm/H/stpl.h"
+#include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 
 // Not in the original: the Vulkan backend, a CGxDevice beside the D3D9 / D3D9Ex / OpenGL ones,
 // selected with the gxApi CVar ("Vulkan") or "-vulkan" on the command line. The engine above the
@@ -162,6 +163,8 @@ class CGxDeviceVulkan : public CGxDevice {
     void IModelViewProj(float out[16]);
     void IRenderStates(gxvk::vk::pipelines::Draw& draw);
     void ITexTransforms(gxvk::vk::pipelines::Draw& draw);
+    // SXC: the volumetric fog's renderer (SXC/Fog/Fog.h), registered at ICreateDrawPath.
+    static bool SxcFogRender(const SXC::Fog::Input& in);
 };
 
 CGxDevice* CreateCGxDeviceVulkan();

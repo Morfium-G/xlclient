@@ -6,6 +6,7 @@
 #include "SXC/Api/sxc_ui.h"
 #include "SXC/Api/sxc_sky.h"
 #include "SXC/Api/sxc_world.h"
+#include "SXC/Api/sxc_fog.h"
 
 #include <cstring>
 #include <memory>
@@ -22,6 +23,10 @@ namespace SXC::WorldApi {
 
 namespace SXC::Sky {
     const sxc_sky_api* Api();
+}
+
+namespace SXC::Fog {
+    const sxc_fog_api* Api();
 }
 
 namespace {
@@ -377,6 +382,10 @@ extern "C" __declspec(dllexport) const void* WXL_CALL sxc_get_service(const char
 
     if (strcmp(name, SXC_SKY_SERVICE) == 0 && version == SXC_SKY_SERVICE_VERSION) {
         return SXC::Sky::Api();
+    }
+
+    if (strcmp(name, SXC_FOG_SERVICE) == 0 && version == SXC_FOG_SERVICE_VERSION) {
+        return SXC::Fog::Api();
     }
 
     return nullptr;

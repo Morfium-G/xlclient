@@ -14,6 +14,7 @@
 #include "SXC/Api/sxc_ui.h"
 #include "SXC/Api/sxc_sky.h"
 #include "SXC/Api/sxc_world.h"
+#include "SXC/Api/sxc_fog.h"
 #include "wxl/mod.h"
 
 namespace {
@@ -30,6 +31,7 @@ namespace {
         { SXC_UI_SERVICE, SXC_UI_SERVICE_VERSION },
         { SXC_WORLD_SERVICE, SXC_WORLD_SERVICE_VERSION },
         { SXC_SKY_SERVICE, SXC_SKY_SERVICE_VERSION },
+        { SXC_FOG_SERVICE, SXC_FOG_SERVICE_VERSION },
     };
 
     void Log(const wxl_host* host, wxl_log_level level, const std::string& line) {

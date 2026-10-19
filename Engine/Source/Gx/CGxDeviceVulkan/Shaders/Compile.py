@@ -32,6 +32,11 @@ OUTPUTS = [
         ("Present.vert", "kPresentVert"),
         ("Present.frag", "kPresentFrag"),
     ]),
+    # SXC: the volumetric fog (Vulkan/Fog.cpp); its full-screen pass reuses Present.vert.
+    ("FogSpirv.inc", [
+        ("Fog.comp", "kFogComp"),
+        ("Fog.frag", "kFogFrag"),
+    ]),
 ]
 
 
