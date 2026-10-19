@@ -18,6 +18,7 @@
 #include "Engine/Source/ConsoleBase/IConsole.h"
 #include "Engine/Source/ConsoleBase/Types.h"
 #include "Engine/Source/Event/Event.h"
+#include "SXC/Sxc.h"  // SXC:
 #include "Engine/Source/Frame/CSimpleRender.h"
 #include "Engine/Source/FrameScript/FrameScript.h"
 #include "Engine/Source/FrameXML/FrameXML.h"
@@ -1013,6 +1014,7 @@ static void InitializeClient() {
     WowSysMessageOutput::Initialize();
     ClientRegisterConsoleCommands();
     ClientDBInitialize();
+    SXC::Startup();  // SXC: custom tables, per-frame work
     LoadingScreenInitialize();
     FrameScript_Initialize(0);
     SI2::Init(0);
