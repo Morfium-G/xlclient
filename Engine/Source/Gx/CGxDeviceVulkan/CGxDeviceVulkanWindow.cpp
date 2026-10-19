@@ -5,6 +5,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
 #include "Engine/Source/Gx/Gx.h"
+#include "SXC/Ui/Ui.h"  // SXC: the debug overlay
 
 namespace frame = gxvk::vk::frame;
 
@@ -195,6 +196,11 @@ void CGxDeviceVulkan::CapsWindowSizeInScreenCoords(CRect& rect) {
 // the hardware cursor built from its image when it is on and visible, none otherwise (the software
 // cursor is drawn by the engine, or the cursor is hidden).
 LRESULT CALLBACK CGxDeviceVulkan::WindowProcVulkan(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    // SXC: the debug overlay sees every message first (Ctrl+F9, and mouse/keyboard while ImGui wants them).
+    if (SXC::Ui::WndProc(hwnd, message, wparam, lparam)) {
+        return 0;
+    }
+
     CGxDeviceVulkan* device = reinterpret_cast<CGxDeviceVulkan*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA));
 
     switch (message) {
