@@ -21,8 +21,10 @@ float Dither(vec2 pixel)
 
 // The fog along the pixel's ray from the camera to `distance`: rgb scattered light, a transmittance.
 // Steps of fp.colour.a yd near the camera, growing with the distance (fp.march.y of it), at most
-// fp.march.z of them; each step's medium averaged exactly (Fog.glsl).
-vec4 March(vec3 dir, float distance, float jitter)
+// fp.march.z of them; each step's medium averaged exactly (Fog.glsl). Past the march's reach, up to the
+// terrain drawn there (`surface`), one long step through the far map (WXL's): flying, the fog then
+// covers the ground below instead of ending in mid-air.
+vec4 March(vec3 dir, float distance, float surface, float jitter)
 {
     vec3 scattered = vec3(0.0);
     float transmittance = 1.0;
@@ -50,7 +52,7 @@ vec4 March(vec3 dir, float distance, float jitter)
 
         vec3 b = fp.origin.xyz + dir * next;
         Field fb = SampleField(b.xy);
-        vec4 medium = StepMedium(a, b, fa, fb);
+        vec4 medium = StepMedium(a, b, fa, fb, false);
         float sigma = medium.a;
         float step = exp(-sigma * (next - t));
         vec3 colour = sigma > 0.0 ? medium.rgb / sigma : fp.colour.rgb;
@@ -59,6 +61,18 @@ vec4 March(vec3 dir, float distance, float jitter)
         a = b;
         fa = fb;
         t = next;
+    }
+
+    if (fp.maps.x > 0.5 && t >= distance && surface > distance + 1.0 && transmittance > 0.004)
+    {
+        vec3 b = fp.origin.xyz + dir * surface;
+        Field fb = SampleField(b.xy);
+        vec4 medium = StepMedium(a, b, fa, fb, true);
+        float sigma = medium.a;
+        float step = exp(-sigma * (surface - distance));
+        vec3 colour = sigma > 0.0 ? medium.rgb / sigma : fp.colour.rgb;
+        scattered += transmittance * (1.0 - step) * colour;
+        transmittance *= step;
     }
 
     return vec4(scattered, transmittance);
@@ -73,13 +87,15 @@ void main()
 
     // The sky (nothing drawn, or the far plane): the fog's own far edge.
     float distance = fp.depth.w;
+    float surface = 0.0; // the terrain drawn at the pixel (0: the sky)
     vec3 dir;
 
     if (d < fp.depth.y * 0.99999)
     {
         float z = (d - fp.depth.x) / max(fp.depth.y - fp.depth.x, 1e-6);
         vec3 p = Unproject(ndc, z);
-        distance = min(length(p), fp.depth.w);
+        surface = length(p);
+        distance = min(surface, fp.depth.w);
         dir = normalize(p);
     }
     else
@@ -91,7 +107,7 @@ void main()
 
     if (fp.march.x > 0.5)
     {
-        fog = March(dir, distance, Dither(pixel));
+        fog = March(dir, distance, surface, Dither(pixel));
     }
     else
     {
@@ -110,7 +126,7 @@ void main()
         fog.a = mix(1.0, fog.a, first);
     }
 
-    if (fp.misc.y > 0.5)
+    if (fp.misc.y > 0.5 && fp.misc.y < 1.5)
     {
         fog.rgb = vec3(1.0, 0.0, 1.0) * (1.0 - fog.a);
     }

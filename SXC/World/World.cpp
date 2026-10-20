@@ -2,6 +2,7 @@
 
 #include "SXC/Api/sxc_world.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -14,6 +15,8 @@
 #include "WoW/Source/Ui/WorldFrame.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/AreaTableRec.h"
+#include "WoW/Source/DB/Rec/CreatureDisplayInfoRec.h"
+#include "WoW/Source/DB/Rec/CreatureModelDataRec.h"
 #include "WoW/Source/DB/Rec/GroundEffectTextureRec.h"
 #include "WoW/Source/DB/Rec/LiquidTypeRec.h"
 #include "WoW/Source/DB/Rec/WeatherRec.h"
@@ -537,13 +540,106 @@ namespace {
         const AreaTableRec* rec = g_areaTableDB.GetRecord(static_cast<int32_t>(area));
         return rec && rec->m_areaName ? rec->m_areaName : "";
     }
+
+    // --- units ----------------------------------------------------------------------------------------
+
+    // A display's collision width: the model's width x its scale x the display's scale; 0 when unknown.
+    float DisplayWidth(uint32_t displayId) {
+        const CreatureDisplayInfoRec* display = g_creatureDisplayInfoDB.GetRecord(static_cast<int32_t>(displayId));
+        const CreatureModelDataRec* model = display ? g_creatureModelDataDB.GetRecord(display->m_modelID) : nullptr;
+
+        if (!model) {
+            return 0.0f;
+        }
+
+        const float width = model->m_collisionWidth * (display->m_creatureModelScale > 0.0f ? display->m_creatureModelScale : 1.0f) *
+                            (model->m_modelScale > 0.0f ? model->m_modelScale : 1.0f);
+        return width > 0.0f && width < 100.0f ? width : 0.0f;
+    }
+
+    struct UnitQuery {
+        C3Vector centre;
+        float range2 = 0.0f;
+        WOWGUID player;
+        std::vector<sxc_world_unit>* found = nullptr;
+    };
+
+    int32_t CollectUnit(WOWGUID guid, void* param) {
+        UnitQuery& q = *static_cast<UnitQuery*>(param);
+        CGObject_C* object = ClntObjMgrObjectPtr(guid, TYPEMASK_OBJECT, __FILE__, __LINE__);
+
+        if (!object || !(object->m_obj->m_type & TYPEMASK_UNIT)) {
+            return 1;
+        }
+
+        CGUnit_C* unit = static_cast<CGUnit_C*>(object);
+        const C3Vector p = unit->GetPosition();
+        const float dx = p.x - q.centre.x, dy = p.y - q.centre.y, dz = p.z - q.centre.z;
+        const float d2 = dx * dx + dy * dy + dz * dz;
+
+        if (d2 > q.range2 || !unit->m_unit) {
+            return 1;
+        }
+
+        const CGUnitData& data = *unit->m_unit;
+        sxc_world_unit u = {};
+        u.guid = guid.m_guid;
+        u.position = wxl_vec3{ p.x, p.y, p.z };
+        u.distance = std::sqrt(d2);
+        u.bounding_radius = data.m_unitFieldBoundingradius > 0.01f && data.m_unitFieldBoundingradius < 20.0f ? data.m_unitFieldBoundingradius : 0.5f;
+        u.effective_radius = u.bounding_radius;
+        u.display_id = data.m_unitFieldDisplayid;
+        u.native_display_id = data.m_unitFieldNativedisplayid;
+        u.mounted = data.m_unitFieldMountdisplayid ? WXL_TRUE : WXL_FALSE;
+        u.is_player = guid == q.player ? WXL_TRUE : WXL_FALSE;
+
+        // Morphed or shapeshifted: the radius by how much wider the model is now (WXL's rule).
+        if (u.display_id && u.native_display_id && u.display_id != u.native_display_id) {
+            const float now = DisplayWidth(u.display_id), native = DisplayWidth(u.native_display_id);
+
+            if (now > 0.0f && native > 0.0f) {
+                const float ratio = now / native;
+                u.effective_radius = u.bounding_radius * (ratio < 0.25f ? 0.25f : (ratio > 6.0f ? 6.0f : ratio));
+            }
+        }
+
+        q.found->push_back(u);
+        return 1;
+    }
+
+    int32_t WXL_CALL Units(const wxl_vec3* centre, float range, sxc_world_unit* out, int32_t max, uint32_t unitSize) {
+        if (!centre || !out || max <= 0 || unitSize == 0 || !ClntObjMgrGetActivePlayerObj()) {
+            return 0;
+        }
+
+        static std::vector<sxc_world_unit> s_found;
+        s_found.clear();
+        UnitQuery q;
+        q.centre = C3Vector(centre->x, centre->y, centre->z);
+        q.range2 = range * range;
+        q.player = ClntObjMgrGetActivePlayer();
+        q.found = &s_found;
+        ClntObjMgrEnumVisibleObjects(&CollectUnit, &q);
+        std::sort(s_found.begin(), s_found.end(), [](const sxc_world_unit& a, const sxc_world_unit& b) { return a.distance < b.distance; });
+
+        const int32_t count = static_cast<int32_t>(s_found.size()) < max ? static_cast<int32_t>(s_found.size()) : max;
+        const size_t copy = unitSize < sizeof(sxc_world_unit) ? unitSize : sizeof(sxc_world_unit);
+
+        for (int32_t i = 0; i < count; i++) {
+            uint8_t* slot = reinterpret_cast<uint8_t*>(out) + static_cast<size_t>(i) * unitSize;
+            std::memset(slot, 0, unitSize);
+            std::memcpy(slot, &s_found[i], copy);
+        }
+
+        return count;
+    }
 }
 
 namespace SXC::WorldApi {
     const sxc_world_api* Api() {
         static const sxc_world_api s_api = {
             sizeof(sxc_world_api), Snapshot, AreaChain, TerrainAreaAt, TerrainHeight, TerrainSample, TerrainLiquid, LiquidCategory, Trace, AreaName,
-            Project, SetWeather, WeatherTest,
+            Project, SetWeather, WeatherTest, Units,
         };
         return &s_api;
     }

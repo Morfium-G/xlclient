@@ -50,7 +50,7 @@ void main()
         {
             vec3 b = fp.origin.xyz + dir * (from + len * float(s));
             Field fb = SampleField(b.xy);
-            vec4 medium = StepMedium(a, b, fa, fb);
+            vec4 medium = StepMedium(a, b, fa, fb, false);
             float sigma = medium.a;
             float step = exp(-sigma * len);
             vec3 colour = sigma > 0.0 ? medium.rgb / sigma : fp.colour.rgb;

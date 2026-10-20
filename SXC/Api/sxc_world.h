@@ -79,6 +79,21 @@ typedef enum sxc_liquid_category
     SXC_LIQUID_SLIME = 3
 } sxc_liquid_category;
 
+/// A unit near a point (sxc_world_api::units). Grows by appending: the caller passes the size it knows.
+typedef struct sxc_world_unit
+{
+    uint64_t guid;
+    wxl_vec3 position;
+    float    bounding_radius;  ///< yd, as the server sends it (UNIT_FIELD_BOUNDINGRADIUS; 0.5 when missing)
+    /// yd: the bounding radius scaled by how much wider the current model is than the native one
+    /// (morphs and shapeshifts change the model, the server keeps the radius)
+    float    effective_radius;
+    float    distance;         ///< yd from the query's centre
+    uint32_t display_id, native_display_id;
+    wxl_bool mounted;          ///< UNIT_FIELD_MOUNTDISPLAYID set
+    wxl_bool is_player;        ///< the active player
+} sxc_world_unit;
+
 /// sxc_world_api::trace: what blocks the line.
 #define SXC_TRACE_TERRAIN_AND_WMO 0x01000124u ///< terrain and map objects (the cursor's mask); models never block
 
@@ -134,6 +149,13 @@ typedef struct sxc_world_api
 
     /// The test weather's type, or -1 when the server's weather shows.
     int32_t(WXL_CALL* weather_test)(void);
+
+    // --- appended 2026-10-20 ------------------------------------------------------------------------
+
+    /// The units (players, NPCs, creatures) within `range` yd of `centre`, nearest first, written to
+    /// `out` (at most `max`, each `unit_size` bytes: pass sizeof(sxc_world_unit); fields past what the
+    /// client knows stay zero). Returns how many were written.
+    int32_t(WXL_CALL* units)(const wxl_vec3* centre, float range, sxc_world_unit* out, int32_t max, uint32_t unit_size);
 } sxc_world_api;
 
 #ifdef __cplusplus

@@ -20,7 +20,23 @@ namespace SXC::Fog {
         const uint16_t* pool = nullptr;
         const uint16_t* tint = nullptr;  // the colour per cell (rgb, x tintBrightness); null: `colour` everywhere
         float tintBrightness = 1.0f;
+        bool fieldReady = false;         // the pool layer's w: how much the near field shows per cell (else 1)
         uint32_t fieldVersion = 0;
+
+        // The far map (sxc_fog_far), the same layout; null = none.
+        uint32_t farSize = 0;
+        float farCellSize = 33.333f;
+        int32_t farFirstI = 0, farFirstJ = 0;
+        const uint16_t* farLayer = nullptr;
+        const uint16_t* farTint = nullptr;   // null: `colour` everywhere
+        uint32_t farVersion = 0;
+
+        // The wake map (sxc_fog_wake); null = none.
+        uint32_t wakeSize = 0;
+        float wakeTexel = 1.0f;
+        float wakeOrigin[2] = {};
+        const uint16_t* wake = nullptr;
+        uint32_t wakeVersion = 0;
 
         float densityScale = 1.0f;
         float noiseAmount = 0.6f;
@@ -35,6 +51,7 @@ namespace SXC::Fog {
         float stepLength = 0.5f; // yd: the steps near the camera
         bool perPixel = true;    // march each pixel's ray; false: the froxel volume
         int32_t maxSteps = 160;  // per pixel: the most steps a ray takes
+        float handover = 16.0f;  // yd: the near field fades into the far map over this band
     };
 
     // Draws the fog over the current target; false when nothing was drawn.

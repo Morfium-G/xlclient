@@ -4,8 +4,9 @@
  * weather and the see-through models); the mod decides where the fog is and how it looks.
  *
  * The medium: a near field around the player (a grid of cells, each with a light layer that thins out
- * upward and a flat-topped pool) and a haze everywhere. Vulkan only: on another renderer available()
- * answers false and the client's own fog stays alone.
+ * upward and a flat-topped pool), a coarse far map beyond it, a haze everywhere; a wake map where
+ * units push the fog aside. Vulkan only: on another renderer available() answers false and the
+ * client's own fog stays alone.
  */
 
 #ifndef SXC_API_FOG_H
@@ -17,6 +18,8 @@
 #define SXC_FOG_SERVICE_VERSION 1
 
 #define SXC_FOG_MAX_FIELD 512
+#define SXC_FOG_MAX_FAR   256
+#define SXC_FOG_MAX_WAKE  256
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,8 +35,8 @@ typedef struct sxc_fog_field
     float        cell_size; ///< yards
     int32_t      first_i, first_j;
     /// Per cell: extinction per yard at the layer's floor (0 = no fog), the floor (world z: full below
-    /// it), the thickness (yards: above the floor it thins by e over this height), patchiness 0..1 (how
-    /// much the noise breaks it up).
+    /// it), the thickness (yards: above the floor it thins by e over this height; negative: the cell
+    /// isn't ready, the far map shows there), patchiness 0..1 (how much the noise breaks it up).
     const float* light;
     /// Per cell: extinction per yard (0 = no pool), the top (world z; flat), the soft band under the
     /// top (yards), unused. May be null.
@@ -41,7 +44,45 @@ typedef struct sxc_fog_field
     /// Per cell: the fog's colour there (rgb, may exceed 1), unused. May be null: the look's colour
     /// everywhere. Multiplied by the look's brightness.
     const float* colour;
+    // --- appended 2026-10-20 ---
+    /// Per cell (one float each): how much the near field shows there, 0..1; the far map shows the
+    /// rest. For cells fading in after they started (no pop where near and far differ). May be null: 1.
+    const float* ready;
 } sxc_fog_field;
+
+/// The far map: the fog beyond the near field, coarse (one cell per terrain chunk is typical). Laid out
+/// like the near field (toroidal, cell (i, j) at [mod(j, size) * size + mod(i, size)], valid for i in
+/// [first_i, first_i + size), fading out over the last 2 cells). It shows where the near field fades
+/// out, and where a near cell isn't ready (a negative thickness in its light layer). Past the look's
+/// far_distance the ray takes one long step through it to the terrain drawn there.
+typedef struct sxc_fog_far
+{
+    uint32_t     struct_size;
+    uint32_t     size;      ///< cells per side, 1 .. SXC_FOG_MAX_FAR
+    float        cell_size; ///< yards
+    int32_t      first_i, first_j;
+    /// Per cell: extinction per yard at the layer's floor (0 = no fog), the floor (world z), the
+    /// thickness (yards: the layer thins by e over it), unused.
+    const float* layer;
+    /// Per cell: the colour (rgb, may exceed 1), unused. May be null: the look's colour. Multiplied by
+    /// the look's brightness.
+    const float* colour;
+} sxc_fog_far;
+
+/// The wake: units pushing the fog aside, a small map around the player (the near field's cells are
+/// too coarse for a person-sized hole). Per texel how much of the fog is pushed out up to which
+/// height, and how far the fog's patches are dragged there.
+typedef struct sxc_fog_wake
+{
+    uint32_t     struct_size;
+    uint32_t     size;      ///< texels per side, 2 .. SXC_FOG_MAX_WAKE
+    float        texel;     ///< yards per texel
+    float        origin[2]; ///< world x, y of texel (0, 0)'s corner; texel (x, y) at [y * size + x]
+    /// Per texel: push 0..1 (the share of the fog taken out; negative: a little more fog, piled up at a
+    /// wake's rim), the push's top (world z: it fades out over half a yard above), the patches'
+    /// displacement x, y (yards). Keep the border texels empty (push 0): the map is clamped.
+    const float* texels;
+} sxc_fog_wake;
 
 typedef struct sxc_fog_look
 {
@@ -58,10 +99,14 @@ typedef struct sxc_fog_look
     float    haze_density;    ///< extinction per yard at the haze's base; 0 = no haze
     float    haze_base;       ///< world z
     float    haze_thickness;  ///< yards: the haze thins by e over this height
-    int32_t  debug;           ///< 1: the fog drawn magenta
+    int32_t  debug;           ///< 1: the fog drawn magenta; 2: the near field green, the far map blue, the haze grey
     float    step_length;     ///< yards: the fog is integrated in steps this long near the camera (smaller: smoother thin layers, more GPU); 0 = 0.5
     int32_t  method;          ///< 0 march every pixel's own ray (sharp thin layers), 1 the froxel volume (cheaper, coarse across the screen)
     int32_t  max_steps;       ///< per pixel: the most steps a ray takes (steps grow with distance); 0 = 160
+    // --- appended 2026-10-20 ---
+    /// yards: the near field fades into the far map over this band at its edge (wider: a softer seam,
+    /// less near detail at its rim); 0 = 16
+    float    handover;
 } sxc_fog_look;
 
 typedef struct sxc_fog_api
@@ -83,6 +128,14 @@ typedef struct sxc_fog_api
     /// The place's stock fog colour this frame (what the sky's distance fog has; it follows the time
     /// of day), rgb 0..1.
     void(WXL_CALL* stock_colour)(float* out_rgb);
+
+    // --- appended 2026-10-20 (check struct_size before using) -------------------------------------
+
+    /// The far map; copied (call again when it changes). Null clears it.
+    void(WXL_CALL* set_far)(const sxc_fog_far* far_map);
+
+    /// The wake map; copied (call each frame it changes). Null clears it.
+    void(WXL_CALL* set_wake)(const sxc_fog_wake* wake);
 } sxc_fog_api;
 
 #ifdef __cplusplus

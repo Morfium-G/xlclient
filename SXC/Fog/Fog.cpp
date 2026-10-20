@@ -25,10 +25,25 @@ namespace {
     // The field, as the renderer takes it (half floats), and its window.
     std::vector<uint16_t> s_light, s_pool, s_tint;
     bool s_haveTint = false;
+    bool s_haveReady = false; // the pool layer's w holds how much the near field shows
     uint32_t s_size = 0;
     float s_cellSize = 2.0f;
     int32_t s_firstI = 0, s_firstJ = 0;
     uint32_t s_version = 0;
+
+    // The far map and the wake, the same way.
+    std::vector<uint16_t> s_farLayer, s_farTint;
+    bool s_haveFarTint = false;
+    uint32_t s_farSize = 0;
+    float s_farCellSize = 33.333f;
+    int32_t s_farFirstI = 0, s_farFirstJ = 0;
+    uint32_t s_farVersion = 0;
+
+    std::vector<uint16_t> s_wake;
+    uint32_t s_wakeSize = 0;
+    float s_wakeTexel = 1.0f;
+    float s_wakeOrigin[2] = {};
+    uint32_t s_wakeVersion = 0;
 
     // How far the patches have drifted (yd): the look's drift velocity summed frame by frame, so a
     // changing wind turns the drift instead of jumping the whole pattern.
@@ -105,7 +120,7 @@ namespace {
         Convert(field->light, s_light, cells);
         Convert(field->pool, s_pool, cells); // zeros without pools
         // The colour per cell (appended to the struct): without it, the look's colour everywhere.
-        const float* tint = field->struct_size >= sizeof(sxc_fog_field) ? field->colour : nullptr;
+        const float* tint = field->struct_size >= offsetof(sxc_fog_field, colour) + sizeof(field->colour) ? field->colour : nullptr;
         s_haveTint = tint != nullptr;
 
         if (s_haveTint) {
@@ -113,6 +128,18 @@ namespace {
         } else {
             s_tint.clear();
         }
+
+        // How much the near field shows per cell (appended later): into the pool layer's spare channel.
+        const float* ready = field->struct_size >= offsetof(sxc_fog_field, ready) + sizeof(field->ready) ? field->ready : nullptr;
+        s_haveReady = ready != nullptr;
+
+        if (s_haveReady) {
+            for (size_t i = 0; i < cells; i++) {
+                const float r = std::isfinite(ready[i]) ? ready[i] : 1.0f;
+                s_pool[i * 4 + 3] = Half(r < 0.0f ? 0.0f : (r > 1.0f ? 1.0f : r));
+            }
+        }
+
         s_size = field->size;
         s_cellSize = field->cell_size > 0.01f ? field->cell_size : 0.01f;
         s_firstI = field->first_i;
@@ -154,7 +181,50 @@ namespace {
         out[2] = stock.b / 255.0f;
     }
 
-    const sxc_fog_api s_api = { sizeof(sxc_fog_api), Available, SetField, SetLook, Status, StockColour };
+    void WXL_CALL SetFar(const sxc_fog_far* map) {
+        s_farVersion++;
+
+        if (!map || map->struct_size < sizeof(sxc_fog_far) || !map->layer || map->size == 0 || map->size > SXC_FOG_MAX_FAR) {
+            s_farSize = 0;
+            s_farLayer.clear();
+            s_farTint.clear();
+            s_haveFarTint = false;
+            return;
+        }
+
+        const size_t cells = static_cast<size_t>(map->size) * map->size;
+        Convert(map->layer, s_farLayer, cells);
+        s_haveFarTint = map->colour != nullptr;
+
+        if (s_haveFarTint) {
+            Convert(map->colour, s_farTint, cells);
+        } else {
+            s_farTint.clear();
+        }
+
+        s_farSize = map->size;
+        s_farCellSize = map->cell_size > 0.01f ? map->cell_size : 0.01f;
+        s_farFirstI = map->first_i;
+        s_farFirstJ = map->first_j;
+    }
+
+    void WXL_CALL SetWake(const sxc_fog_wake* wake) {
+        s_wakeVersion++;
+
+        if (!wake || wake->struct_size < sizeof(sxc_fog_wake) || !wake->texels || wake->size < 2 || wake->size > SXC_FOG_MAX_WAKE) {
+            s_wakeSize = 0;
+            s_wake.clear();
+            return;
+        }
+
+        Convert(wake->texels, s_wake, static_cast<size_t>(wake->size) * wake->size);
+        s_wakeSize = wake->size;
+        s_wakeTexel = wake->texel > 0.01f ? wake->texel : 0.01f;
+        s_wakeOrigin[0] = wake->origin[0];
+        s_wakeOrigin[1] = wake->origin[1];
+    }
+
+    const sxc_fog_api s_api = { sizeof(sxc_fog_api), Available, SetField, SetLook, Status, StockColour, SetFar, SetWake };
 }
 
 namespace SXC::Fog {
@@ -166,10 +236,12 @@ namespace SXC::Fog {
         s_renderer = renderer;
         s_status = status;
         s_version++; // a new device holds no field yet
+        s_farVersion++;
+        s_wakeVersion++;
     }
 
     bool WaterWritesDepth() {
-        return s_renderer && s_haveLook && s_look.enabled && s_size > 0;
+        return s_renderer && s_haveLook && s_look.enabled && (s_size > 0 || s_farSize > 0);
     }
 
     void Composite() {
@@ -218,9 +290,31 @@ namespace SXC::Fog {
             in.pool = s_pool.data();
             in.tint = s_haveTint ? s_tint.data() : nullptr;
             in.tintBrightness = s_look.brightness;
+            in.fieldReady = s_haveReady;
         }
 
         in.fieldVersion = s_version;
+
+        if (s_farSize) {
+            in.farSize = s_farSize;
+            in.farCellSize = s_farCellSize;
+            in.farFirstI = s_farFirstI;
+            in.farFirstJ = s_farFirstJ;
+            in.farLayer = s_farLayer.data();
+            in.farTint = s_haveFarTint ? s_farTint.data() : nullptr;
+        }
+
+        in.farVersion = s_farVersion;
+
+        if (s_wakeSize) {
+            in.wakeSize = s_wakeSize;
+            in.wakeTexel = s_wakeTexel;
+            in.wakeOrigin[0] = s_wakeOrigin[0];
+            in.wakeOrigin[1] = s_wakeOrigin[1];
+            in.wake = s_wake.data();
+        }
+
+        in.wakeVersion = s_wakeVersion;
         in.densityScale = s_look.density_scale;
         in.noiseAmount = s_look.noise_amount;
         in.noiseTile = s_look.noise_tile;
@@ -234,6 +328,7 @@ namespace SXC::Fog {
         in.stepLength = s_look.step_length > 0.0f ? s_look.step_length : 0.5f;
         in.perPixel = s_look.method == 0;
         in.maxSteps = s_look.max_steps > 0 ? s_look.max_steps : 160;
+        in.handover = s_look.handover > 2.0f ? s_look.handover : 16.0f; // zero in a shorter (older) look
         s_renderer(in);
     }
 }

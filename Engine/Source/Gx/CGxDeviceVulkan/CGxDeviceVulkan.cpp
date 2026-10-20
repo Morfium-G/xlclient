@@ -283,6 +283,20 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
     f.tint = in.tint;
     f.tintBrightness = in.tintBrightness;
     f.fieldVersion = in.fieldVersion;
+    f.fieldReady = in.fieldReady;
+    f.farSize = in.farSize;
+    f.farCellSize = in.farCellSize;
+    f.farFirstI = in.farFirstI;
+    f.farFirstJ = in.farFirstJ;
+    f.farLayer = in.farLayer;
+    f.farTint = in.farTint;
+    f.farVersion = in.farVersion;
+    f.wakeSize = in.wakeSize;
+    f.wakeTexel = in.wakeTexel;
+    f.wakeOrigin[0] = in.wakeOrigin[0];
+    f.wakeOrigin[1] = in.wakeOrigin[1];
+    f.wake = in.wake;
+    f.wakeVersion = in.wakeVersion;
     f.densityScale = in.densityScale;
     f.noiseAmount = in.noiseAmount;
     f.noiseTile = in.noiseTile;
@@ -297,6 +311,7 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
     f.stepLength = in.stepLength;
     f.perPixel = in.perPixel;
     f.maxSteps = in.maxSteps;
+    f.handover = in.handover;
     return gxvk::vk::fog::Record(f);
 }
 
