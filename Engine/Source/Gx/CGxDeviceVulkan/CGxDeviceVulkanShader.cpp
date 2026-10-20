@@ -23,6 +23,8 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Log.h"  // SXC:
 #include "SXC/Settings/Settings.h"  // SXC: [Terrain] OurShader
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: our terrain shader's covers
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"  // SXC:
 
 namespace {
     namespace manifest  = gxvk::vk::manifest;
@@ -442,8 +444,9 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
         return draw.fragment == pipelines::FragmentProgram::FixedFunction ? 3u : 1u;
     }
 
-    // SXC: our terrain shader for a terrain pair it covers (both stages: it pairs only with itself).
-    if (vsTranslated && psTranslated && OurTerrain().Get()) {
+    // SXC: our terrain shader for a terrain pair it covers (both stages: it pairs only with itself). It
+    // reads the covers' set 2, so it needs Vulkan/Cover.
+    if (vsTranslated && psTranslated && OurTerrain().Get() && gxvk::vk::cover::Ready()) {
         const CGxShader* vsShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
         const CGxShader* psShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
 
@@ -458,6 +461,9 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
                 draw.vertexRows = pipelines::kVertexRowsSmall;
                 draw.terrainVertex = v.options;
                 draw.terrainFragment = p.options;
+                // The covers' set for this frame, made now: its textures resolve like the draw's own
+                // stages, before the draw takes the pass (an inline upload may end it).
+                gxvk::vk::cover::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial());
 
                 if (g_terrainDraws++ == 0) {
                     SXC::LogOnce("gxvk-terrain-on", "vulkan: our terrain shader draws the terrain (first: %s / %s)", vsShader->m_key.m_str, psShader->m_key.m_str);

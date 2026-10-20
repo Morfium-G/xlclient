@@ -35,6 +35,13 @@ layout(location = 6) out vec4 texcoord4;
 layout(location = 7) out vec4 texcoord5;
 layout(location = 8) out vec4 texcoord6;
 layout(location = 10) out float fog0;
+// SXC: for the covers (Terrain.frag, TerrainCover.glsl): the world position and how much the ground
+// faces up, the view position and normal (the wet shine per pixel), the factor the vertex colour put
+// into color0 (rows that don't use it take it out again).
+layout(location = 11) out vec4 coverWorld;
+layout(location = 12) out vec4 coverView;
+layout(location = 13) out vec4 coverNormal;
+layout(location = 14) out vec4 coverTint;
 
 layout(std140, set = 1, binding = 0) uniform Regs {
     vec4 p[16];
@@ -182,6 +189,14 @@ void main()
     texcoord4 = tc[4];
     texcoord5 = tc[5];
     texcoord6 = tc[6];
+
+    // The covers' extras: the terrain's vertices are in world space (the world matrix moves them by the
+    // camera), and so are its normals.
+    vec3 up = inNormal.xyz * inversesqrt(max(dot(inNormal.xyz, inNormal.xyz), 1e-12));
+    coverWorld = vec4(inPosition.xyz, up.z);
+    coverView = vec4(pos.xyz, 0.0);
+    coverNormal = vec4(n, 0.0);
+    coverTint = vec4(kVertexColor ? inColor.xyz : vec3(0.5), 0.0);
 
     // D3D clip space has +y up, Vulkan +y down; z is already in [0, 1].
     gl_Position = vec4(clip.x, -clip.y, clip.z, clip.w);

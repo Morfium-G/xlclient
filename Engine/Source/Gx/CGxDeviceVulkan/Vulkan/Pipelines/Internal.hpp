@@ -156,6 +156,7 @@ namespace gxvk::vk::pipelines::detail
         VkPipelineLayout layout   = VK_NULL_HANDLE;
         VkDescriptorSet  set0     = VK_NULL_HANDLE;
         VkDescriptorSet  set1     = VK_NULL_HANDLE;
+        VkDescriptorSet  set2     = VK_NULL_HANDLE;   ///< SXC: the covers' (our terrain shader)
         uint32_t         offset1  = 0;
         bool             have1    = false;
         VkBuffer         vbs[kMaxStreams + 1]     = {};
@@ -180,10 +181,12 @@ namespace gxvk::vk::pipelines::detail
     };
 
     /// One set-0 layout: binding s for each slot s of the mask, and the pipeline layout over it
-    /// and the set-1 layout.
+    /// and the set-1 layout (SXC: and the covers' set 2, for our terrain shader).
     struct LayoutEntry
     {
         uint32_t              mask   = 0;
+        bool                  cover  = false;   ///< SXC: set 2 is Vulkan/Cover's
+
         VkDescriptorSetLayout set0   = VK_NULL_HANDLE;
         VkPipelineLayout      layout = VK_NULL_HANDLE;
     };
@@ -228,7 +231,7 @@ namespace gxvk::vk::pipelines::detail
         VkShaderModule        vert[kVertexPrograms]   = {};   ///< the backend's own; Translated stays null
         VkShaderModule        frag[kFragmentPrograms] = {};
         VkShaderModule        terrainVert       = VK_NULL_HANDLE;   ///< SXC: Shaders/Terrain.vert
-        VkShaderModule        terrainFrag[4][3] = {};               ///< SXC: Shaders/Terrain.frag by layers - 1, shadow group
+        VkShaderModule        terrainFrag[2][4][3] = {};            ///< SXC: Shaders/Terrain.frag by bindless covers, layers - 1, shadow group
         VkDescriptorSetLayout regsLayout = VK_NULL_HANDLE;    ///< set 1: one dynamic uniform buffer, both stages
         VkDescriptorPool      regsPool   = VK_NULL_HANDLE;    ///< the set-1 sets, for the session
         VkPipelineCache       cache      = VK_NULL_HANDLE;
@@ -283,7 +286,7 @@ namespace gxvk::vk::pipelines::detail
 
     // Layouts.cpp
     bool CreateRegsLayout();
-    bool LayoutFor(uint32_t samplerMask, uint32_t& index);
+    bool LayoutFor(uint32_t samplerMask, bool cover, uint32_t& index);
     void DestroyLayouts();
 
     // Build.cpp

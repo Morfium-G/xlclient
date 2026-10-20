@@ -1,5 +1,6 @@
 // The graphics pipelines a draw binds: the module's life and the record of one draw.
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 
 #include <cstring>
 #include <new>
@@ -84,6 +85,7 @@ namespace gxvk::vk::pipelines
             Shutdown();
             return false;
         }
+        gxvk::vk::cover::Init();  // SXC: optional; without it the terrain stays on the stock shaders
 
         // The set-1 sets, one per uniform chunk, for the session.
         VkDescriptorPoolSize size = {};
@@ -132,6 +134,7 @@ namespace gxvk::vk::pipelines
         DestroyDescriptorObjects();
         if (s.regsPool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.regsPool, nullptr);
         DestroyLayouts();
+        gxvk::vk::cover::Shutdown();  // SXC: after the pipeline layouts over its set layout
         memory::DestroyBuffer(s.constant);
         if (s.cache != VK_NULL_HANDLE) d.DestroyPipelineCache(s.device, s.cache, nullptr);
         DestroyPrograms();
@@ -177,7 +180,8 @@ namespace gxvk::vk::pipelines
         else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated)
             samplerMask = 3u;
         uint32_t layoutIndex = 0;
-        if (!LayoutFor(samplerMask, layoutIndex))
+        const bool cover = draw.fragment == FragmentProgram::Terrain;  // SXC: our terrain shader reads the covers' set 2
+        if (!LayoutFor(samplerMask, cover, layoutIndex))
         {
             ++s.stats.skipped;
             return false;
@@ -241,6 +245,14 @@ namespace gxvk::vk::pipelines
             return false;
         }
 
+        // SXC: set 2, the covers' (written and uploaded at the frame's first terrain draw).
+        const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial) : VK_NULL_HANDLE;
+        if (cover && set2 == VK_NULL_HANDLE)
+        {
+            ++s.stats.skipped;
+            return false;
+        }
+
         const loader::Device& d = *s.dapi;
         Bound& b = s.bound;
         if (b.cmd != cmd || b.serial != serial)
@@ -262,6 +274,7 @@ namespace gxvk::vk::pipelines
             b.layout = layout.layout;
             b.set0   = VK_NULL_HANDLE;
             b.set1   = VK_NULL_HANDLE;
+            b.set2   = VK_NULL_HANDLE;  // SXC:
             b.have1  = false;
             b.pushed = false;
         }
@@ -276,6 +289,11 @@ namespace gxvk::vk::pipelines
             b.set1    = set1;
             b.offset1 = offset1;
             b.have1   = true;
+        }
+        if (cover && b.set2 != set2)  // SXC:
+        {
+            d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 2, 1, &set2, 0, nullptr);
+            b.set2 = set2;
         }
 
         VkBuffer     vbs[kMaxStreams + 1];

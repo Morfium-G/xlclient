@@ -4,6 +4,8 @@
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/Spirv.inc"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/TerrainSpirv.inc"  // SXC: our terrain shader
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"         // SXC: which set of its pixel modules
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
 namespace
 {
@@ -38,11 +40,20 @@ namespace
         const uint32_t* words;
         size_t          bytes;
     };
-    const TerrainFragSource kTerrainFrags[4][3] = {
-        { { kTerrainFrag10, sizeof kTerrainFrag10 }, { kTerrainFrag11, sizeof kTerrainFrag11 }, { kTerrainFrag12, sizeof kTerrainFrag12 } },
-        { { kTerrainFrag20, sizeof kTerrainFrag20 }, { kTerrainFrag21, sizeof kTerrainFrag21 }, { kTerrainFrag22, sizeof kTerrainFrag22 } },
-        { { kTerrainFrag30, sizeof kTerrainFrag30 }, { kTerrainFrag31, sizeof kTerrainFrag31 }, { kTerrainFrag32, sizeof kTerrainFrag32 } },
-        { { kTerrainFrag40, sizeof kTerrainFrag40 }, { kTerrainFrag41, sizeof kTerrainFrag41 }, { kTerrainFrag42, sizeof kTerrainFrag42 } },
+    // [0] the cover textures in 16 slots, [1] in one array indexed per pixel (Vulkan/Cover's bindless mode).
+    const TerrainFragSource kTerrainFrags[2][4][3] = {
+        {
+            { { kTerrainFrag10, sizeof kTerrainFrag10 }, { kTerrainFrag11, sizeof kTerrainFrag11 }, { kTerrainFrag12, sizeof kTerrainFrag12 } },
+            { { kTerrainFrag20, sizeof kTerrainFrag20 }, { kTerrainFrag21, sizeof kTerrainFrag21 }, { kTerrainFrag22, sizeof kTerrainFrag22 } },
+            { { kTerrainFrag30, sizeof kTerrainFrag30 }, { kTerrainFrag31, sizeof kTerrainFrag31 }, { kTerrainFrag32, sizeof kTerrainFrag32 } },
+            { { kTerrainFrag40, sizeof kTerrainFrag40 }, { kTerrainFrag41, sizeof kTerrainFrag41 }, { kTerrainFrag42, sizeof kTerrainFrag42 } },
+        },
+        {
+            { { kTerrainFrag10B, sizeof kTerrainFrag10B }, { kTerrainFrag11B, sizeof kTerrainFrag11B }, { kTerrainFrag12B, sizeof kTerrainFrag12B } },
+            { { kTerrainFrag20B, sizeof kTerrainFrag20B }, { kTerrainFrag21B, sizeof kTerrainFrag21B }, { kTerrainFrag22B, sizeof kTerrainFrag22B } },
+            { { kTerrainFrag30B, sizeof kTerrainFrag30B }, { kTerrainFrag31B, sizeof kTerrainFrag31B }, { kTerrainFrag32B, sizeof kTerrainFrag32B } },
+            { { kTerrainFrag40B, sizeof kTerrainFrag40B }, { kTerrainFrag41B, sizeof kTerrainFrag41B }, { kTerrainFrag42B, sizeof kTerrainFrag42B } },
+        },
     };
 
     // SXC: boolean / integer constants as 32-bit values, ids 0.. in order.
@@ -81,9 +92,12 @@ namespace gxvk::vk::pipelines::detail
     bool CreateTerrainModules()
     {
         if (!CreateModule(kTerrainVert, sizeof kTerrainVert, s.terrainVert, "Terrain.vert")) return false;
-        for (uint32_t l = 0; l < 4; ++l)
-            for (uint32_t g = 0; g < 3; ++g)
-                if (!CreateModule(kTerrainFrags[l][g].words, kTerrainFrags[l][g].bytes, s.terrainFrag[l][g], "Terrain.frag")) return false;
+        // The bindless set (SPIR-V 1.5) only where the device is 1.2 with non-uniform indexing.
+        const bool bindless = (context::Caps().enabled & gxvk::vk::kCapSampledArrayNonUniform) != 0;
+        for (uint32_t b = 0; b < (bindless ? 2u : 1u); ++b)
+            for (uint32_t l = 0; l < 4; ++l)
+                for (uint32_t g = 0; g < 3; ++g)
+                    if (!CreateModule(kTerrainFrags[b][l][g].words, kTerrainFrags[b][l][g].bytes, s.terrainFrag[b][l][g], "Terrain.frag")) return false;
         return true;
     }
 
@@ -123,12 +137,13 @@ namespace gxvk::vk::pipelines::detail
         // SXC: our terrain shader's modules.
         if (s.terrainVert != VK_NULL_HANDLE) s.dapi->DestroyShaderModule(s.device, s.terrainVert, nullptr);
         s.terrainVert = VK_NULL_HANDLE;
-        for (auto& row : s.terrainFrag)
-            for (VkShaderModule& m : row)
-            {
-                if (m != VK_NULL_HANDLE) s.dapi->DestroyShaderModule(s.device, m, nullptr);
-                m = VK_NULL_HANDLE;
-            }
+        for (auto& set : s.terrainFrag)
+            for (auto& row : set)
+                for (VkShaderModule& m : row)
+                {
+                    if (m != VK_NULL_HANDLE) s.dapi->DestroyShaderModule(s.device, m, nullptr);
+                    m = VK_NULL_HANDLE;
+                }
     }
 
     /// The vertex module of a key: the backend's own for its program, the record's for Translated.
@@ -146,7 +161,7 @@ namespace gxvk::vk::pipelines::detail
         if (k.fragment == static_cast<uint32_t>(FragmentProgram::Terrain))
         {
             const uint32_t group = terrain::ShadowGroup(k.terrainFragment);
-            return group < 3 ? s.terrainFrag[terrain::Layers(k.terrainFragment) - 1][group] : VK_NULL_HANDLE;
+            return group < 3 ? s.terrainFrag[gxvk::vk::cover::Bindless() ? 1 : 0][terrain::Layers(k.terrainFragment) - 1][group] : VK_NULL_HANDLE;
         }
         return k.fragment < kFragmentPrograms ? s.frag[k.fragment] : VK_NULL_HANDLE;
     }

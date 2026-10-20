@@ -9,6 +9,7 @@
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Storm/H/stpl.h"
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: surface covers
 
 // Not in the original: the Vulkan backend, a CGxDevice beside the D3D9 / D3D9Ex / OpenGL ones,
 // selected with the gxApi CVar ("Vulkan") or "-vulkan" on the command line. The engine above the
@@ -165,6 +166,9 @@ class CGxDeviceVulkan : public CGxDevice {
     void ITexTransforms(gxvk::vk::pipelines::Draw& draw);
     // SXC: the volumetric fog's renderer (SXC/Fog/Fog.h), registered at ICreateDrawPath.
     static bool SxcFogRender(const SXC::Fog::Input& in);
+    // SXC: the covers' data for our terrain shader (SXC/Cover/Cover.h -> Vulkan/Cover), its textures
+    // resolved to this device's images. Registered at ICreateDrawPath.
+    static bool SxcCoverFrame(gxvk::vk::cover::Frame& out);
 };
 
 CGxDevice* CreateCGxDeviceVulkan();

@@ -23,6 +23,7 @@
 #include "Engine/Source/Os/Error.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
+#include "SXC/Cover/Cover.h"  // SXC: surface covers
 
 namespace context   = gxvk::vk::context;
 namespace frame     = gxvk::vk::frame;
@@ -249,7 +250,60 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         CGxDevice::Log("CGxDeviceVulkan::ICreateDrawPath(): device memory, the textures, the shaders, the pipelines, the present pass or the queries could not be brought up (the lines above say why); nothing is drawn");
     } else {
         SXC::Fog::SetRenderer(&CGxDeviceVulkan::SxcFogRender, &gxvk::vk::fog::Status);  // SXC: volumetric fog
+        gxvk::vk::cover::SetProvider(&CGxDeviceVulkan::SxcCoverFrame);                  // SXC: surface covers
+        SXC::Cover::SetDevice(gxvk::vk::cover::Ready(), gxvk::vk::cover::TextureSlots(), &gxvk::vk::cover::Status);
     }
+}
+
+// SXC: the covers' data for our terrain shader, once per frame at its first terrain draw: what the mod
+// set (SXC/Cover), the cover textures resolved to this device's images (and stamped with this frame).
+bool CGxDeviceVulkan::SxcCoverFrame(gxvk::vk::cover::Frame& out) {
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+    const SXC::Cover::Frame& in = SXC::Cover::Current();
+
+    if (!device || !device->m_drawPath || !in.on) {
+        return false;
+    }
+
+    out.on = true;
+    out.fallenSnow = in.fallenSnow;
+    out.debug = in.debug;
+    out.brightness = in.brightness;
+    out.wetDarkening = in.wetDarkening;
+    out.thinDepth = in.thinDepth;
+    out.depthScale = in.depthScale;
+    out.breakupScale = in.breakupScale;
+    out.driftScale = in.driftScale;
+    out.textureTile = in.textureTile;
+    std::memcpy(out.outside, in.outside, sizeof out.outside);
+    out.entries = in.entries;
+    out.entryCount = in.entryCount;
+    out.nearSize = in.nearSize;
+    out.nearCell = in.nearCell;
+    out.nearFirstI = in.nearFirstI;
+    out.nearFirstJ = in.nearFirstJ;
+    out.nearCells = in.nearCells;
+    out.nearVersion = in.nearVersion;
+    out.farSize = in.farSize;
+    out.farCell = in.farCell;
+    out.farFirstI = in.farFirstI;
+    out.farFirstJ = in.farFirstJ;
+    out.farCells = in.farCells;
+    out.farVersion = in.farVersion;
+    out.textureGloss = in.textureGloss;
+    out.slotCount = in.slotCount < gxvk::vk::cover::kBindlessSlots ? in.slotCount : gxvk::vk::cover::kBindlessSlots;
+    static pipelines::Draw scratch;  // ITexResolve writes a draw's stage; one is reused
+
+    for (uint32_t s = 0; s < out.slotCount; s++) {
+        out.slotTexture[s] = in.slotTexture[s];
+        scratch.textureMask = 0;
+
+        if (in.slotGx[s] && device->ITexResolve(in.slotGx[s], 0, scratch) && !scratch.textures[0].cube) {
+            out.slots[s] = scratch.textures[0];
+        }
+    }
+
+    return true;
 }
 
 // SXC: the volumetric fog over the current target (SXC/Fog/Fog.h), with this device's own view of the
@@ -356,6 +410,7 @@ void CGxDeviceVulkan::IReleaseVulkanWindow() {
 void CGxDeviceVulkan::IDestroyVulkan() {
     this->ICursorDestroy();
     SXC::Fog::SetRenderer(nullptr, nullptr);  // SXC: volumetric fog
+    SXC::Cover::SetDevice(false, 0, nullptr); // SXC: surface covers
     frame::ReleaseSwapchain();
     this->IReleasePools();
     this->IReleaseTextures();

@@ -23,6 +23,7 @@
 #include "WoW/Source/WorldClient/MapLight.h"
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
+#include "SXC/Cover/Cover.h"  // SXC:
 #if defined(_MSC_VER)
 #include <malloc.h>
 #else
@@ -2724,6 +2725,7 @@ void CMapRenderChunk::RenderSinglePassVertexPixelShader() {
     g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), blendTex);
 
     CMapRenderChunk::SetVertexShader(this, this->m_layersCount + 1, specular);
+    SXC::Cover::BeforeChunkDraw(this);  // SXC: the layers' cover entries for our terrain shader
     g_theGxDevicePtr->Draw(&this->m_batch, 1);
 
     for (uint32_t j = 0; j < this->m_layersCount; j++) {

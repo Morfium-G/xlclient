@@ -10,8 +10,13 @@
 // Samplers: s0..s(LAYERS-1) the layers, s(LAYERS) the alpha map (rgb the layers' weights, a the baked
 // shadow), s5..s8 the shadow cascades. Pixel registers: p1 the layers' lighting (0 = unlit), p2 the fog
 // colour, p3..p10 the shadow taps' offsets. The math follows the stock records operation by operation
-// (5a: the stock look, unchanged).
+// (5a: the stock look, unchanged); the covers (5b, TerrainCover.glsl) change the layers' colour and
+// gloss before the light, and add a wet shine, only while a mod turns them on.
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#if COVER_BINDLESS
+#extension GL_EXT_nonuniform_qualifier : require
+#endif
 
 #ifndef LAYERS
 #define LAYERS 1
@@ -62,6 +67,8 @@ layout(std140, set = 1, binding = 0) uniform Regs {
     vec4 misc;   // misc.x = alphaRef / 255 (0 = off)
     vec4 v[64];
 } regs;
+
+#include "TerrainCover.glsl"
 
 // Coordinate k (the vertex shader's packing): one per varying, or two per varying with the cascades.
 vec2 Coord(int k)
@@ -144,6 +151,10 @@ void main()
 #endif
     }
 
+    // SXC: the covers over the layers (painted, fallen snow, wetness); unchanged while they're off.
+    CoverResult cov = Covers(c, CoverLayerWeights(alpha, kBigAlpha), twice, !kUnlit);
+    c = cov.c;
+
     // The shadow: the alpha map's baked one, or the cascades'.
     float shadow = alpha.w;
 
@@ -193,10 +204,12 @@ void main()
     // layers' alpha (their gloss) where unshadowed. Unlit layers carry their light already.
     vec3 colour;
     float shade = shadow * 0.3 + 0.7;
+    // SXC: the wet shine, on top of the stock highlight (zero while the covers are off or it's dry).
+    vec3 shine = regs.v[27].xyz * CoverWetShine(cov.wet, c.w, color1.w);
 
     if (kUnlit)
     {
-        vec3 highlight = c.www * color1.xyz;
+        vec3 highlight = c.www * color1.xyz + shine;
         highlight = shadow * highlight;
         colour = c.xyz * shade + highlight;
     }
@@ -205,8 +218,15 @@ void main()
         colour = c.xyz * shade;
         colour = colour * color0.xyz;
         colour = colour + colour;
-        vec3 highlight = c.www * color1.xyz;
+        vec3 highlight = c.www * color1.xyz + shine;
         colour = highlight * shadow + colour;
+    }
+
+    // SXC: the covers' debug views, unlit and unfogged.
+    if (cover.enable.x > 0.5 && cover.enable.y > 0.5)
+    {
+        oC0 = vec4(CoverDebug(cov, int(cover.enable.y + 0.5)), 1.0);
+        return;
     }
 
     // The fog: toward its colour by the vertex fog factor.

@@ -1,7 +1,9 @@
 // The descriptor set layouts and the pipeline layouts: set 0 is one combined image sampler per
 // declared sampler slot (one layout per distinct slot set), set 1 the translated interface's
-// dynamic uniform buffer; every pipeline layout is {set 0, set 1} plus the push range.
+// dynamic uniform buffer; every pipeline layout is {set 0, set 1} plus the push range (SXC: our terrain
+// shader's {set 0, set 1, the covers' set 2}).
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 
 namespace gxvk::vk::pipelines::detail
 {
@@ -35,14 +37,17 @@ namespace gxvk::vk::pipelines::detail
      * pipeline.
      *
      * @param uint32 samplerMask : bit N for slot N
+     * @param bool cover : SXC: with the covers' set 2 (our terrain shader; Vulkan/Cover ready)
      * @param uint32& index : receives the table index
      * @return bool ok : false when the table is full or a create failed (logged)
      */
-    bool LayoutFor(uint32_t samplerMask, uint32_t& index)
+    bool LayoutFor(uint32_t samplerMask, bool cover, uint32_t& index)
     {
+        const VkDescriptorSetLayout coverLayout = cover ? gxvk::vk::cover::SetLayout() : VK_NULL_HANDLE;  // SXC:
+        if (cover && coverLayout == VK_NULL_HANDLE) return false;
         for (uint32_t i = 0; i < s.layoutCount; ++i)
         {
-            if (s.layouts[i].mask == samplerMask)
+            if (s.layouts[i].mask == samplerMask && s.layouts[i].cover == cover)
             {
                 index = i;
                 return true;
@@ -76,7 +81,8 @@ namespace gxvk::vk::pipelines::detail
         setLayout.pBindings    = count ? bindings : nullptr;
 
         LayoutEntry e;
-        e.mask = samplerMask;
+        e.mask  = samplerMask;
+        e.cover = cover;
         VkResult r = d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &e.set0);
         if (r != VK_SUCCESS)
         {
@@ -88,10 +94,10 @@ namespace gxvk::vk::pipelines::detail
         push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.offset     = 0;
         push.size       = kPushBytes;
-        const VkDescriptorSetLayout sets[2] = { e.set0, s.regsLayout };
+        const VkDescriptorSetLayout sets[3] = { e.set0, s.regsLayout, coverLayout };
         VkPipelineLayoutCreateInfo layout = {};
         layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout.setLayoutCount         = 2;
+        layout.setLayoutCount         = cover ? 3 : 2;
         layout.pSetLayouts            = sets;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges    = &push;
@@ -106,7 +112,8 @@ namespace gxvk::vk::pipelines::detail
         index = s.layoutCount;
         s.layouts[s.layoutCount++] = e;
         s.stats.layouts = s.layoutCount;
-        Write(Debug, "vulkan: pipelines: layout #%u for sampler slots 0x%04X (%u binding%s)", s.layoutCount, samplerMask, count, count == 1 ? "" : "s");
+        Write(Debug, "vulkan: pipelines: layout #%u for sampler slots 0x%04X (%u binding%s)%s", s.layoutCount, samplerMask, count, count == 1 ? "" : "s",
+              cover ? " with the covers' set" : "");
         return true;
     }
 
