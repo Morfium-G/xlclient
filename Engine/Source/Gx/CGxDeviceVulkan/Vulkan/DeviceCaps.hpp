@@ -33,6 +33,9 @@ namespace gxvk::vk
         kCapSpirv13          = 1u << 13,  ///< a 1.1 device: SPIR-V 1.3, the subgroup operations (subgroupOps)
         kCapSpirv15          = 1u << 14,  ///< a 1.2 device: SPIR-V 1.5
         kCapMultiViewport    = 1u << 15,  ///< multiViewport: gl_ViewportIndex (with kCapLayerFromVertex, from a vertex shader)
+        /// SXC: shaderSampledImageArrayNonUniformIndexing (a 1.2 device): a sampler array indexed per pixel
+        /// ("bindless"; the terrain's cover textures, Vulkan/Cover)
+        kCapSampledArrayNonUniform = 1u << 16,
     };
 
     /// What the probe found and the device was created with. Zeroed (a 1.0 device, nothing optional)
