@@ -172,6 +172,8 @@ namespace gxvk::vk::pipelines
             samplerMask = draw.fragmentRecord->samplerMask;
             cubeMask    = draw.fragmentRecord->cubeMask;
         }
+        else if (draw.fragment == FragmentProgram::Terrain)
+            samplerMask = terrain::SamplerMask(draw.terrainFragment);  // SXC: what the module declares
         else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated)
             samplerMask = 3u;
         uint32_t layoutIndex = 0;
@@ -203,6 +205,8 @@ namespace gxvk::vk::pipelines
         k.vertexRecord   = draw.vertex == VertexProgram::Translated ? manifest::IndexOf(draw.vertexRecord) : manifest::kNoRecord;
         k.fragmentRecord = draw.fragment == FragmentProgram::Translated ? manifest::IndexOf(draw.fragmentRecord) : manifest::kNoRecord;
         k.layoutIndex    = layoutIndex;
+        k.terrainVertex   = draw.vertex == VertexProgram::Terrain ? draw.terrainVertex : 0u;      // SXC:
+        k.terrainFragment = draw.fragment == FragmentProgram::Terrain ? draw.terrainFragment : 0u;
 
         const Entry* entry = Lookup(k);
         if (!entry || entry->pipeline == VK_NULL_HANDLE)

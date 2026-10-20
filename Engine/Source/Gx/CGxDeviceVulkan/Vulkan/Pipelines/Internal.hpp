@@ -106,13 +106,14 @@ namespace gxvk::vk::pipelines::detail
 
     /// The engine attribute indices (EGxVertexAttrib) the programs read.
     constexpr uint32_t kAttribPosition  = 0;
+    constexpr uint32_t kAttribNormal    = 3;  // SXC: our terrain shader
     constexpr uint32_t kAttribColor0    = 4;
     constexpr uint32_t kAttribTexCoord0 = 6;
     constexpr uint32_t kAttribTexCoord1 = 7;
 
     /// Whether a program is of the translated family (reads set 1, the semantic interface).
-    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic; }
-    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated; }
+    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain; }
+    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain; }
 
     /// What a pipeline is built from. Compared bytewise, so every byte is set (zeroed first).
     struct Key
@@ -136,6 +137,8 @@ namespace gxvk::vk::pipelines::detail
         uint16_t     vertexRecord;    ///< manifest index, kNoRecord when not Translated
         uint16_t     fragmentRecord;
         uint32_t     layoutIndex;     ///< the set-0 layout (sampler-slot set)
+        uint32_t     terrainVertex;   ///< SXC: VertexProgram::Terrain's options, else 0
+        uint32_t     terrainFragment; ///< SXC: FragmentProgram::Terrain's options, else 0
     };
 
     struct Entry
@@ -224,6 +227,8 @@ namespace gxvk::vk::pipelines::detail
         const loader::Device* dapi   = nullptr;
         VkShaderModule        vert[kVertexPrograms]   = {};   ///< the backend's own; Translated stays null
         VkShaderModule        frag[kFragmentPrograms] = {};
+        VkShaderModule        terrainVert       = VK_NULL_HANDLE;   ///< SXC: Shaders/Terrain.vert
+        VkShaderModule        terrainFrag[4][3] = {};               ///< SXC: Shaders/Terrain.frag by layers - 1, shadow group
         VkDescriptorSetLayout regsLayout = VK_NULL_HANDLE;    ///< set 1: one dynamic uniform buffer, both stages
         VkDescriptorPool      regsPool   = VK_NULL_HANDLE;    ///< the set-1 sets, for the session
         VkPipelineCache       cache      = VK_NULL_HANDLE;
@@ -261,9 +266,20 @@ namespace gxvk::vk::pipelines::detail
 
     // Programs.cpp
     bool CreatePrograms();
+    bool CreateTerrainModules();  // SXC:
     void DestroyPrograms();
     VkShaderModule VertexModule(const Key& k);
     VkShaderModule FragmentModule(const Key& k);
+    /// SXC: the specialization constants of a key's terrain stage (null for any other program). The
+    /// returned info points into `storage`, which must outlive the pipeline's creation.
+    struct TerrainSpecialization
+    {
+        VkSpecializationMapEntry entries[6];
+        uint32_t                 values[6];
+        VkSpecializationInfo     info;
+    };
+    const VkSpecializationInfo* VertexSpecialization(const Key& k, TerrainSpecialization& storage);
+    const VkSpecializationInfo* FragmentSpecialization(const Key& k, TerrainSpecialization& storage);
 
     // Layouts.cpp
     bool CreateRegsLayout();

@@ -220,6 +220,18 @@ namespace
                 AddAttribute(k, in, 5, kAttribTexCoord1, VK_FORMAT_R32G32_SFLOAT, kConstantTexcoordOffset);
                 return true;
 
+            // SXC: our terrain shader reads position0, normal0 and color0 (white when the vertex has none).
+            case VertexProgram::Terrain:
+                if (!(k.attribMask & (1u << kAttribNormal)))
+                {
+                    why = "the terrain vertex has no normal";
+                    return false;
+                }
+                AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 1, kAttribNormal, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 2, kAttribColor0, VK_FORMAT_B8G8R8A8_UNORM, kConstantColourOffset);
+                return true;
+
             case VertexProgram::Translated:
             {
                 const manifest::Record* r = manifest::At(k.vertexRecord);
@@ -273,6 +285,14 @@ namespace
         }
         if (!TranslatedFamily(v)) return true;
 
+        // SXC: our terrain shaders pair only with each other (the vertex one writes every varying).
+        if ((v == VertexProgram::Terrain) != (f == FragmentProgram::Terrain))
+        {
+            why = "our terrain shader is paired with another program";
+            return false;
+        }
+        if (v == VertexProgram::Terrain) return true;
+
         uint32_t outputs = 0xFFFFFFFFu;
         if (v == VertexProgram::Translated)
         {
@@ -309,8 +329,8 @@ namespace
     const char* ProgramName(uint32_t program, uint16_t record, bool vertex)
     {
         if (const manifest::Record* r = manifest::At(record)) return manifest::FirstName(*r);
-        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated" };
-        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated" };
+        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated", "Terrain" };
+        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated", "Terrain" };
         if (vertex) return program < kVertexPrograms ? kVertex[program] : "?";
         return program < kFragmentPrograms ? kFragment[program] : "?";
     }
@@ -366,15 +386,18 @@ namespace
             return false;
         }
 
+        TerrainSpecialization vertexConstants, fragmentConstants;  // SXC: our terrain shader's options
         VkPipelineShaderStageCreateInfo stages[2] = {};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
         stages[0].module = vert;
         stages[0].pName  = "main";
+        stages[0].pSpecializationInfo = VertexSpecialization(k, vertexConstants);
         stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
         stages[1].module = frag;
         stages[1].pName  = "main";
+        stages[1].pSpecializationInfo = FragmentSpecialization(k, fragmentConstants);
 
         VkVertexInputBindingDescription bindings[kMaxStreams + 1] = {};
         uint32_t bindingCount = 0;

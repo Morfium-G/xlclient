@@ -29,6 +29,10 @@ namespace gxvk::vk::manifest { struct Record; }
 //               FixedFunctionTranslated the fixed-function pixel stage in that interface, for a
 //                                      translated vertex module drawn with no pixel shader
 //
+//   SXC: our terrain shader (Shaders/Terrain.vert, Terrain.frag), in the translated interface, in place
+//   of the client's terrain records when [Terrain] OurShader is on: Terrain for both stages, the
+//   record's options as specialization constants (Draw::terrainVertex / terrainFragment).
+//
 // A pipeline is built for each distinct combination of vertex layout, programs (and records),
 // topology, blend mode, depth and culling state, colour write mask, fill mode, sampler-slot set and
 // render pass, on first use, and kept for the device's life. The viewport, the scissor, the depth
@@ -57,6 +61,7 @@ namespace gxvk::vk::pipelines
         Ui            = 1,
         FixedFunctionSemantic = 2,
         Translated    = 3,
+        Terrain       = 4,   // SXC:
         Count
     };
 
@@ -67,8 +72,27 @@ namespace gxvk::vk::pipelines
         Desaturate    = 2,
         FixedFunctionTranslated = 3,
         Translated    = 4,
+        Terrain       = 5,   // SXC:
         Count
     };
+
+    // SXC: our terrain shader's options, packed (Shaders/Terrain.vert, Terrain.frag).
+    namespace terrain
+    {
+        // Vertex: bits 0-1 layers - 1, 2 shadow, 3 env, 4 vertex colour, 5 specular, 6 point lights.
+        constexpr uint32_t kVertexShadow = 1u << 2, kVertexEnv = 1u << 3, kVertexColor = 1u << 4, kVertexSpecular = 1u << 5, kVertexPointLights = 1u << 6;
+        // Fragment: bits 0-1 layers - 1, 2-3 shadow group (0 none, 1 one cascade, 2 all), 4 big alpha,
+        // 5 unlit layers, 6 nine taps (shadow mode 3).
+        constexpr uint32_t kFragmentBigAlpha = 1u << 4, kFragmentUnlit = 1u << 5, kFragmentNineTaps = 1u << 6;
+        inline uint32_t Layers(uint32_t options) { return (options & 3u) + 1u; }
+        inline uint32_t ShadowGroup(uint32_t fragment) { return (fragment >> 2) & 3u; }
+        /// The samplers a fragment module of these options declares: the layers, the alpha map, the cascades.
+        inline uint32_t SamplerMask(uint32_t fragment)
+        {
+            const uint32_t group = ShadowGroup(fragment);
+            return ((1u << (Layers(fragment) + 1u)) - 1u) | (group >= 1 ? 1u << 5 : 0u) | (group >= 2 ? 0xEu << 5 : 0u);
+        }
+    }
 
     struct Stream
     {
@@ -132,6 +156,8 @@ namespace gxvk::vk::pipelines
         FragmentProgram         fragment       = FragmentProgram::FixedFunction;
         const manifest::Record* vertexRecord   = nullptr;   ///< with VertexProgram::Translated
         const manifest::Record* fragmentRecord = nullptr;   ///< with FragmentProgram::Translated
+        uint32_t terrainVertex   = 0;   ///< SXC: with VertexProgram::Terrain, terrain::kVertex* options
+        uint32_t terrainFragment = 0;   ///< SXC: with FragmentProgram::Terrain, terrain::kFragment* options
 
         /// The push constants (Shaders/Push.glsl): the transform (the row-major matrix, or c0..c3),
         /// the parameters (alpha reference, textured stages, colour ops, alpha ops) and the texture
