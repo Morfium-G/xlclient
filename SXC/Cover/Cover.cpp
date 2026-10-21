@@ -1,6 +1,7 @@
 // sxc.cover (SXC/Api/sxc_cover.h) and its seam in the terrain chunk draw (SXC/Cover/Cover.h).
 
 #include "SXC/Cover/Cover.h"
+#include "SXC/Cover/Trails.h"
 
 #include <algorithm>
 #include <cmath>
@@ -31,7 +32,7 @@
 namespace {
     using namespace SXC::Cover;
 
-    static_assert(sizeof(sxc_cover_entry) == 64, "the terrain shader reads entries as four vec4");
+    static_assert(sizeof(sxc_cover_entry) == 80, "the terrain shader reads entries as five vec4");
     static_assert(SXC_COVER_MAX_ENTRIES == kMaxEntries && SXC_COVER_MAX_TEXTURES == kMaxTextures, "SXC/Cover/Cover.h follows the API");
 
     bool s_available = false;
@@ -92,7 +93,7 @@ namespace {
     uint64_t s_resolved = 0, s_draws = 0, s_withCover = 0;
 
     Frame s_frame;
-    char s_status[200] = "";
+    char s_status[512] = "";
 
     void Release(Texture& t) {
         if (t.texture) {
@@ -379,9 +380,17 @@ namespace {
                           s_wanted, s_slots, s_unslotted);
         }
 
-        std::snprintf(s_status, sizeof(s_status), "%s; chunks drawn %llu (%llu with cover), resolved %llu, %u entries; %s", s_deviceStatus ? s_deviceStatus() : "",
+        char trails[120] = "trails off";
+
+        if (s_look.trails) {
+            const Trails::Stats t = Trails::GetStats();
+            std::snprintf(trails, sizeof(trails), "trails: %u feet followed, %u carvings last frame, %llu footsteps", t.feet, t.stamps,
+                          static_cast<unsigned long long>(t.footsteps));
+        }
+
+        std::snprintf(s_status, sizeof(s_status), "%s; chunks drawn %llu (%llu with cover), resolved %llu, %u entries; %s; %s", s_deviceStatus ? s_deviceStatus() : "",
                       static_cast<unsigned long long>(s_draws), static_cast<unsigned long long>(s_withCover), static_cast<unsigned long long>(s_resolved),
-                      static_cast<unsigned>(s_entries.size()), textures);
+                      static_cast<unsigned>(s_entries.size()), textures, trails);
         return s_status;
     }
 
@@ -437,6 +446,41 @@ namespace SXC::Cover {
         f.tessDetail = s_look.tess_detail > 0.0f ? (s_look.tess_detail > 0.002f ? s_look.tess_detail : 0.002f) : 0.0f;
         f.tessReach = s_look.tess_reach > 1.0f ? s_look.tess_reach : 1.0f;
         f.tessMost = s_look.tess_most >= 1.0f ? s_look.tess_most : 1.0f;
+
+        // Trails: carved now (the feet's bones are this frame's), handed over with what changed.
+        Trails::Settings trails;
+        trails.on = s_look.trails != 0 && f.tessDetail > 0.0f;
+        trails.reach = s_look.trail_reach > 1.0f ? s_look.trail_reach : 1.0f;
+        Trails::Update(trails);
+        f.trails = trails.on;
+        f.trailNow = Trails::Now();
+        f.trailPersist = s_look.trail_persist > 1.0f ? s_look.trail_persist : 1.0f;
+        f.trailSlur = s_look.trail_slur > 0.0f ? s_look.trail_slur : 0.0f;
+        f.trailRim = s_look.trail_rim > 0.0f ? s_look.trail_rim : 0.0f;
+        static std::vector<int32_t> s_rects[2];
+        const Trails::Layer* layers[2] = { &Trails::Fine(), &Trails::Coarse() };
+        Frame::TrailLayer* views[2] = { &f.trailFine, &f.trailCoarse };
+
+        for (int k = 0; k < 2; k++) {
+            const Trails::Layer& L = *layers[k];
+            Frame::TrailLayer& v = *views[k];
+            s_rects[k].clear();
+
+            for (const Trails::Rect& r : L.dirty) {
+                s_rects[k].insert(s_rects[k].end(), { r.x, r.y, r.w, r.h });
+            }
+
+            v.size = trails.on ? L.size : 0;
+            v.cell = L.cell;
+            v.firstI = L.firstI;
+            v.firstJ = L.firstJ;
+            v.cells = L.cells.empty() ? nullptr : L.cells.data();
+            v.rects = s_rects[k].empty() ? nullptr : s_rects[k].data();
+            v.rectCount = static_cast<uint32_t>(L.dirty.size());
+            v.full = L.full;
+        }
+
+        Trails::TookChanges();
 
         f.entries = s_entries.empty() ? nullptr : s_entries.data();
         f.entryCount = static_cast<uint32_t>(s_entries.size());

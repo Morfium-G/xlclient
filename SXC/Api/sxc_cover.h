@@ -39,7 +39,7 @@
 extern "C" {
 #endif
 
-/// One cover as the terrain shader reads it (64 bytes).
+/// One cover as the terrain shader reads it (80 bytes).
 typedef struct sxc_cover_entry
 {
     float    depth;         ///< yd; 0 = no painted cover (the entry may still be a fallen-snow look)
@@ -56,6 +56,11 @@ typedef struct sxc_cover_entry
     uint32_t flags;         ///< SXC_COVER_*
     float    z_offset;      ///< yd the cover's base sits above (+) or below (-) the terrain: below, only what rises above it shows
     float    reserved;
+    // Trails (step 5d):
+    float    stiffness;     ///< 0 feet press it to the ground .. 1 rigid (no trail)
+    float    rim;           ///< the rim pushed up beside a trail, share of the cover's depth
+    float    relax_seconds; ///< a trail fills back in over this long
+    float    reserved2;
 } sxc_cover_entry;
 
 typedef struct sxc_cover_layer
@@ -119,6 +124,14 @@ typedef struct sxc_cover_look
     float    tess_detail;
     float    tess_reach;      ///< yd: the terrain is subdivided within this distance (beyond, raised at its own vertices)
     float    tess_most;       ///< segments per triangle edge at most (the GPU's limit caps it)
+    /// Trails (step 5d; with depth): units' feet press the cover down where they step and drag (found
+    /// from their models' footstep events, followed by their bones), a rim beside. A fine layer near the
+    /// player fills back in by the covers' relax_seconds; a coarse one keeps the trail for trail_persist.
+    wxl_bool trails;
+    float    trail_persist;   ///< s: the coarse layer keeps a trail this long
+    float    trail_slur;      ///< how much deeper cover softens a trail's edges (radius per yd of depth)
+    float    trail_rim;       ///< x every rim
+    float    trail_reach;     ///< yd: units within this of the player leave trails
 } sxc_cover_look;
 
 typedef struct sxc_cover_api

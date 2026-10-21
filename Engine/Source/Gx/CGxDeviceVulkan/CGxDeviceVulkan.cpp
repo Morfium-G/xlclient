@@ -279,6 +279,24 @@ bool CGxDeviceVulkan::SxcCoverFrame(gxvk::vk::cover::Frame& out) {
     out.tessDetail = in.tessDetail;
     out.tessReach = in.tessReach;
     out.tessMost = in.tessMost;
+    out.trails = in.trails;
+    out.trailNow = in.trailNow;
+    out.trailPersist = in.trailPersist;
+    out.trailSlur = in.trailSlur;
+    out.trailRim = in.trailRim;
+    const SXC::Cover::Frame::TrailLayer* trailIn[2] = { &in.trailFine, &in.trailCoarse };
+    gxvk::vk::cover::Frame::TrailLayer* trailOut[2] = { &out.trailFine, &out.trailCoarse };
+
+    for (int k = 0; k < 2; k++) {
+        trailOut[k]->size = trailIn[k]->size;
+        trailOut[k]->cell = trailIn[k]->cell;
+        trailOut[k]->firstI = trailIn[k]->firstI;
+        trailOut[k]->firstJ = trailIn[k]->firstJ;
+        trailOut[k]->cells = trailIn[k]->cells;
+        trailOut[k]->rects = trailIn[k]->rects;
+        trailOut[k]->rectCount = trailIn[k]->rectCount;
+        trailOut[k]->full = trailIn[k]->full;
+    }
     out.entries = in.entries;
     out.entryCount = in.entryCount;
     out.nearSize = in.nearSize;

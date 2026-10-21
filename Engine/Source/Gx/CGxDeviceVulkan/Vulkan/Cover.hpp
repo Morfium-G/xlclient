@@ -22,6 +22,7 @@ namespace gxvk::vk::cover
     constexpr uint32_t kBindlessSlots = 1024; ///< slots with per-pixel indexing (one per texture)
     constexpr uint32_t kFallbackSlots = 16;   ///< slots without it (the textures in view)
     constexpr uint32_t kMaxMap      = 256;
+    constexpr uint32_t kMaxTrail    = 1024;   ///< trail layers: texels per side at most
 
     struct Frame
     {
@@ -50,6 +51,22 @@ namespace gxvk::vk::cover
         int32_t      farFirstI = 0, farFirstJ = 0;
         const float* farCells = nullptr;
         uint32_t     farVersion = 0;
+
+        // Trails (step 5d): the fine and the coarse layer (RGBA32F, toroidal like the maps), and the
+        // texel rectangles that changed (x, y, w, h each) unless all of it did.
+        struct TrailLayer
+        {
+            uint32_t       size = 0;      ///< 0 = none
+            float          cell = 1.0f;
+            int32_t        firstI = 0, firstJ = 0;
+            const float*   cells = nullptr;
+            const int32_t* rects = nullptr;
+            uint32_t       rectCount = 0;
+            bool           full = true;
+        };
+        bool       trails = false;
+        float      trailNow = 0.0f, trailPersist = 600.0f, trailSlur = 0.6f, trailRim = 1.0f;
+        TrailLayer trailFine, trailCoarse;
 
         // The texture slots: slot s (1..slotCount) holds texture slotTexture[s - 1] (0 none) as
         // slots[s - 1] (view null: not loaded, drawn plain); textureGloss[id - 1]: its alpha is a gloss mask.

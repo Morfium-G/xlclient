@@ -34,9 +34,10 @@ namespace
     using gxvk::vk::ResultName;
 
     constexpr uint32_t kSlots      = frame::kFramesInFlight;
-    /// Bindings: 0 parameters, 1 near map, 2 far map, then the textures: one array at 3 (bindless), or
-    /// one binding per slot from 3.
-    constexpr uint32_t kFirstTex   = 3;
+    /// Bindings: 0 parameters, 1 near map, 2 far map, 3 and 4 the trails (fine, coarse), then the
+    /// textures: one array at 5 (bindless), or one binding per slot from 5.
+    constexpr uint32_t kFirstTex   = 5;
+    constexpr uint32_t kEntryRows  = 5;                          ///< vec4 per entry (sxc_cover_entry, 80 bytes)
     constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots;
     constexpr uint32_t kTerrainSamplers = 9;                     ///< set 0 of the terrain modules: 4 layers, the alpha map, 4 cascades
     constexpr VkFormat kMapFormat  = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -52,8 +53,12 @@ namespace
         float tuning[4];     ///< thin depth (yd), 1 / texture tile (1/yd), depth scale, far map present
         float tuning2[4];    ///< breakup scale, drift scale, fallen snow on, entries
         float tess[4];       ///< raised chunks: yd per segment per yd of distance, reach (yd), most segments per edge, on
+        float trailFine[4];  ///< trails: cell (yd), size, first i, first j (size 0: none)
+        float trailCoarse[4];
+        float trail[4];      ///< now (s), persist (s), slur (yd per yd of depth), on
+        float trail2[4];     ///< rim scale, 0, 0, 0
         float texInfo[kMaxTextures / 4][4]; ///< per texture k (at [k / 4][k % 4]): its slot x 4 (0 none), + 2 gloss mask
-        float entries[kMaxEntries * 4][4];
+        float entries[kMaxEntries * kEntryRows][4];
     };
 
     struct Image
@@ -94,6 +99,9 @@ namespace
         Image    nearMap, farMap, white;
         uint32_t nearVersion = 0, farVersion = 0;
         bool     nearPresent = false, farPresent = false;
+        Image    trailMaps[2];                ///< fine, coarse
+        bool     trailPresent[2] = {};
+        VkPipelineStageFlags readers = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; ///< the stages that read the maps
 
         char status[200] = "no terrain drawn yet";
     };
@@ -190,7 +198,7 @@ namespace
         range.levelCount = 1;
         range.layerCount = 1;
         s.dapi->CmdClearColorImage(cmd, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1, &range);
-        Barrier(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        Barrier(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, s.readers,
                 VK_ACCESS_SHADER_READ_BIT);
     }
 
@@ -213,7 +221,7 @@ namespace
         if (!frame::Stage(bytes, buffer, offset, mapped)) return false;
         std::memcpy(mapped, cells, static_cast<size_t>(bytes));
 
-        Barrier(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        Barrier(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.readers, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT);
         VkBufferImageCopy copy = {};
         copy.bufferOffset                = offset;
@@ -221,8 +229,60 @@ namespace
         copy.imageSubresource.layerCount = 1;
         copy.imageExtent                 = VkExtent3D{ size, size, 1 };
         s.dapi->CmdCopyBufferToImage(cmd, buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        Barrier(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        Barrier(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, s.readers,
                 VK_ACCESS_SHADER_READ_BIT);
+        return true;
+    }
+
+    /// A trail layer: the whole of it (a new window, a new image), else only the rectangles that changed.
+    bool UploadTrail(VkCommandBuffer cmd, Image& img, const Frame::TrailLayer& t, bool& present)
+    {
+        if (!t.cells || t.size == 0 || t.size > gxvk::vk::cover::kMaxTrail)
+        {
+            present = false;
+            return true;
+        }
+        if (!present || t.full || img.size != t.size)
+        {
+            present = Upload(cmd, img, t.cells, t.size);
+            return present;
+        }
+        if (!t.rectCount || !t.rects) return true;
+
+        VkDeviceSize bytes = 0;
+        for (uint32_t r = 0; r < t.rectCount; ++r) bytes += static_cast<VkDeviceSize>(t.rects[r * 4 + 2]) * t.rects[r * 4 + 3] * 16;
+        VkBuffer     buffer = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        void*        mapped = nullptr;
+        // Not staged: the changes are gone (the provider forgot them), so the whole layer next frame.
+        if (!frame::Stage(bytes, buffer, offset, mapped))
+        {
+            present = false;
+            return false;
+        }
+
+        static VkBufferImageCopy copies[256];
+        const uint32_t count = t.rectCount < 256 ? t.rectCount : 256;
+        VkDeviceSize at = 0;
+        for (uint32_t r = 0; r < count; ++r)
+        {
+            const int32_t x = t.rects[r * 4], y = t.rects[r * 4 + 1], w = t.rects[r * 4 + 2], h = t.rects[r * 4 + 3];
+            for (int32_t row = 0; row < h; ++row)
+                std::memcpy(static_cast<uint8_t*>(mapped) + at + static_cast<VkDeviceSize>(row) * w * 16, t.cells + (static_cast<size_t>(y + row) * t.size + x) * 4,
+                            static_cast<size_t>(w) * 16);
+            VkBufferImageCopy& c = copies[r];
+            c = VkBufferImageCopy{};
+            c.bufferOffset                = offset + at;
+            c.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            c.imageSubresource.layerCount = 1;
+            c.imageOffset                 = VkOffset3D{ x, y, 0 };
+            c.imageExtent                 = VkExtent3D{ static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 };
+            at += static_cast<VkDeviceSize>(w) * h * 16;
+        }
+
+        Barrier(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.readers, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        s.dapi->CmdCopyBufferToImage(cmd, buffer, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, count, copies);
+        Barrier(cmd, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, s.readers, VK_ACCESS_SHADER_READ_BIT);
         return true;
     }
 
@@ -274,7 +334,7 @@ namespace gxvk::vk::cover
         h->iapi->GetPhysicalDeviceProperties(h->physical, &props);
         const VkPhysicalDeviceLimits& lim = props.limits;
         auto fits = [&](uint32_t slots) {
-            const uint32_t samplers = kTerrainSamplers + 2 + slots;
+            const uint32_t samplers = kTerrainSamplers + (kFirstTex - 1) + slots;
             return lim.maxPerStageDescriptorSamplers >= samplers && lim.maxPerStageDescriptorSampledImages >= samplers && lim.maxPerStageResources >= samplers + 2 &&
                    lim.maxDescriptorSetSamplers >= samplers && lim.maxDescriptorSetSampledImages >= samplers;
         };
@@ -287,17 +347,19 @@ namespace gxvk::vk::cover
         if (!fits(kFallbackSlots) || lim.maxUniformBufferRange < sizeof(Params))
         {
             Write(Warn, "vulkan: cover: the device takes %u samplers per stage (%u needed); the terrain stays on the stock shaders, without covers",
-                  lim.maxPerStageDescriptorSamplers, kTerrainSamplers + 2 + kFallbackSlots);
+                  lim.maxPerStageDescriptorSamplers, kTerrainSamplers + (kFirstTex - 1) + kFallbackSlots);
             s.failed = true;
             return false;
         }
         if (indexing && !s.bindless)
             Write(Debug, "vulkan: cover: per-pixel texture indexing is there, but %u samplers per stage aren't (%u): 16 texture slots",
-                  kTerrainSamplers + 2 + kBindlessSlots, lim.maxPerStageDescriptorSamplers);
+                  kTerrainSamplers + (kFirstTex - 1) + kBindlessSlots, lim.maxPerStageDescriptorSamplers);
 
         // The raised chunks (step 5c): where the device tessellates (the caps probe enabled it).
         s.tessellation = (context::Caps().enabled & gxvk::vk::kCapTessellation) != 0 && lim.maxTessellationGenerationLevel >= 8;
         s.maxTessLevel = s.tessellation ? static_cast<float>(lim.maxTessellationGenerationLevel < 32 ? lim.maxTessellationGenerationLevel : 32) : 1.0f;
+        s.readers = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                    (s.tessellation ? VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT | VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT : 0u);
 
         const uint32_t bindingCount = s.bindless ? kFirstTex + 1 : kFirstTex + kFallbackSlots;
         VkDescriptorSetLayoutBinding bindings[kMaxBindings] = {};
@@ -322,7 +384,7 @@ namespace gxvk::vk::cover
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = (2 + s.textureSlots) * kSlots;
+        sizes[1].descriptorCount = (kFirstTex - 1 + s.textureSlots) * kSlots;
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool.maxSets       = kSlots;
@@ -357,7 +419,9 @@ namespace gxvk::vk::cover
         if (s.failed) return false;
 
         // 1 x 1 placeholders until the maps come (no snow, all kept, dry, no water) and for missing textures.
-        if (!CreateImage(1, kMapFormat, s.nearMap) || !CreateImage(1, kMapFormat, s.farMap) || !CreateImage(1, VK_FORMAT_R8G8B8A8_UNORM, s.white)) return false;
+        if (!CreateImage(1, kMapFormat, s.nearMap) || !CreateImage(1, kMapFormat, s.farMap) || !CreateImage(1, VK_FORMAT_R8G8B8A8_UNORM, s.white)
+            || !CreateImage(1, kMapFormat, s.trailMaps[0]) || !CreateImage(1, kMapFormat, s.trailMaps[1]))
+            return false;
 
         s.ready = true;
         Write(Info, "vulkan: cover: ready (%u texture slots%s, %s, a %u-byte parameter block)", s.textureSlots, s.bindless ? ", indexed per pixel" : "",
@@ -402,6 +466,18 @@ namespace gxvk::vk::cover
             s.farVersion = f.farVersion;
             uploaded = uploaded && s.farPresent;
         }
+        // The trails: what changed since last frame (or all of a new window).
+        static const float kUntouched[4] = { 1.0e6f, 0.0f, 0.0f, 0.0f };
+        const Frame::TrailLayer* trailLayers[2] = { &f.trailFine, &f.trailCoarse };
+        for (int k = 0; k < 2; ++k)
+        {
+            Clear(pre, s.trailMaps[k], kUntouched);
+            if (!on || !f.trails)
+                s.trailPresent[k] = false;
+            else
+                uploaded = UploadTrail(pre, s.trailMaps[k], *trailLayers[k], s.trailPresent[k]) && uploaded;
+            Clear(pre, s.trailMaps[k], kUntouched);
+        }
         Clear(pre, s.nearMap, kEmpty); // remade for a new size and not filled: cleared
         Clear(pre, s.farMap, kEmpty);
 
@@ -436,6 +512,19 @@ namespace gxvk::vk::cover
         p.tess[1]    = f.tessReach;
         p.tess[2]    = f.tessMost < s.maxTessLevel ? f.tessMost : s.maxTessLevel;
         p.tess[3]    = on && s.tessellation && f.tessDetail > 0.0f ? 1.0f : 0.0f;
+        float* trailRows[2] = { p.trailFine, p.trailCoarse };
+        for (int k = 0; k < 2; ++k)
+        {
+            trailRows[k][0] = trailLayers[k]->cell;
+            trailRows[k][1] = static_cast<float>(s.trailPresent[k] ? s.trailMaps[k].size : 0);
+            trailRows[k][2] = static_cast<float>(trailLayers[k]->firstI);
+            trailRows[k][3] = static_cast<float>(trailLayers[k]->firstJ);
+        }
+        p.trail[0]   = f.trailNow;
+        p.trail[1]   = f.trailPersist;
+        p.trail[2]   = f.trailSlur;
+        p.trail[3]   = on && f.trails && (s.trailPresent[0] || s.trailPresent[1]) ? 1.0f : 0.0f;
+        p.trail2[0]  = f.trailRim;
         // Per texture: the slot showing it (a loaded one), and its gloss flag.
         for (uint32_t k = 0; k < kMaxTextures; ++k)
             p.texInfo[k / 4][k % 4] = on && f.textureGloss && f.textureGloss[k] ? 2.0f : 0.0f;
@@ -447,16 +536,18 @@ namespace gxvk::vk::cover
             p.texInfo[(id - 1) / 4][(id - 1) % 4] += 4.0f * static_cast<float>(sl + 1);
             ++textures;
         }
-        if (entries) std::memcpy(p.entries, f.entries, entries * 64);
+        if (entries) std::memcpy(p.entries, f.entries, entries * kEntryRows * 16);
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
         // The parameters and the maps every frame; the texture bindings when a view changed (in the
         // bindless array most stay put frame after frame). An empty slot holds the white image.
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkDescriptorImageInfo  maps[2] = {
+        VkDescriptorImageInfo  maps[4] = {
             { s.mapSampler, s.nearMap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
             { s.mapSampler, s.farMap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+            { s.mapSampler, s.trailMaps[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+            { s.mapSampler, s.trailMaps[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         };
         static VkDescriptorImageInfo texImages[kBindlessSlots];
         bool texturesChanged = !slot.texturesWritten;
@@ -485,6 +576,8 @@ namespace gxvk::vk::cover
         add(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1).pBufferInfo = &params;
         add(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[0];
         add(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[1];
+        add(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[2];
+        add(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[3];
         if (texturesChanged)
         {
             if (s.bindless)
@@ -515,6 +608,8 @@ namespace gxvk::vk::cover
         DestroyImage(s.nearMap);
         DestroyImage(s.farMap);
         DestroyImage(s.white);
+        DestroyImage(s.trailMaps[0]);
+        DestroyImage(s.trailMaps[1]);
         for (Slot& slot : s.slots) memory::DestroyBuffer(slot.params);
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);
         if (s.mapSampler != VK_NULL_HANDLE) d.DestroySampler(s.device, s.mapSampler, nullptr);

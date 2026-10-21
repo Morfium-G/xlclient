@@ -35,10 +35,17 @@ const float kSlopeStep = 0.25;
 // yd of cover from which a point takes its own light rather than its triangle's stock light.
 const float kOwnLightHeight = 0.05;
 
+// The covers' height here, pressed down by the trails (step 5d).
 float HeightAt(vec2 xy, float groundZ, float up)
 {
+    if (cover.enable.x < 0.5)
+    {
+        return 0.0;
+    }
+
     vec4 alpha = textureLod(sAlpha, TerrainCoord(LAYERS, xy), 0.0);
-    return CoverHeight(xy, groundZ, up, CoverLayerWeights(alpha, kBigAlpha));
+    CoverSpot s = CoverEvaluate(xy, groundZ, up, CoverLayerWeights(alpha, kBigAlpha));
+    return CoverTrailed(xy, groundZ, s.paintedHeight + s.snowHeight, s);
 }
 
 void main()

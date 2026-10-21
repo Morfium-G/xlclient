@@ -26,12 +26,18 @@ layout(std140, set = 2, binding = 0) uniform CoverBlock {
     vec4 tuning;      // thin depth (yd), 1 / texture tile (1/yd), depth scale, far map present
     vec4 tuning2;     // breakup scale, drift scale, fallen snow on, entries
     vec4 tess;        // the tessellation (Terrain.tesc): yd per segment per yd of distance, reach (yd), most segments per edge, on
+    vec4 trailFine;   // trails (step 5d): cell (yd), size (0 none), first i, first j
+    vec4 trailCoarse;
+    vec4 trail;       // now (s), the coarse layer's persist (s), slur (yd of edge softening per yd of depth), on
+    vec4 trail2;      // x the rims
     vec4 texInfo[256]; // texture k + 1 at [k / 4][k % 4]: its slot x 4 (0 = none: drawn plain), + 2 its alpha is a gloss mask
-    vec4 entries[127 * 4];
+    vec4 entries[127 * 5];
 } cover;
 
 layout(set = 2, binding = 1) uniform sampler2D sCoverNear;
 layout(set = 2, binding = 2) uniform sampler2D sCoverFar;
+layout(set = 2, binding = 3) uniform sampler2D sTrailFine;    // per cell: pressed to (world z; 1e6 untouched), when, rim strength, when
+layout(set = 2, binding = 4) uniform sampler2D sTrailCoarse;
 
 const uint kCoverPreventUnderwater = 1u;
 const uint kCoverPreventOnLand     = 2u;
@@ -118,9 +124,10 @@ vec4 CoverGround(vec2 xy)
 }
 
 // --- entries -----------------------------------------------------------------------------------------
-vec4 CoverEntry(int e, int row) { return cover.entries[(e - 1) * 4 + row]; }
+vec4 CoverEntry(int e, int row) { return cover.entries[(e - 1) * 5 + row]; }
 
 // Row 3 holds integers (sxc_cover_entry::texture, flags) and the z offset: the integers by their bits.
+// Row 4: stiffness, rim, relax seconds (the trails).
 int CoverEntryTexture(vec4 e3) { return floatBitsToInt(e3.x); }
 uint CoverEntryFlags(vec4 e3) { return floatBitsToUint(e3.y); }
 
@@ -172,6 +179,10 @@ struct CoverSpot
     float snowHeight;    // yd
     float snowWet;       // the snow looks' own wet look
     int   entry;         // the strongest painted entry
+    // The trails (step 5d), from the covers that make the height, weighted by their part of it.
+    float stiffness;     // 0 pressed to the ground .. 1 rigid
+    float rimShare;      // the rim, share of the depth
+    float relax;         // s: a trail fills back in over this long
 };
 
 // A painted layer's weight here: its paint, its water flags, its moisture need (mud: full 0.1 above its
@@ -224,11 +235,15 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
     s.snowHeight = 0.0;
     s.snowWet = 0.0;
     s.entry = 0;
+    s.stiffness = 0.0;
+    s.rimShare = 0.3;
+    s.relax = 30.0;
     int entries = int(cover.tuning2.w + 0.5);
 
     // The painted covers: each layer's entry by its weight here.
     ivec4 painted = ivec4(regs.p[11] + 0.5);
     float depth = 0.0, zOffset = 0.0, maxSlope = 0.0, slopeFade = 0.0, breakup = 0.0, driftAmount = 0.0, strongest = 0.0;
+    vec3 paintedTrail = vec3(0.0), snowTrail = vec3(0.0, 0.3, 30.0);   // stiffness, rim, relax
 
     for (int l = 0; l < LAYERS; l++)
     {
@@ -255,6 +270,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
         driftAmount += pw * e0.w;
         breakup += pw * e2.x;
         s.rowWet += pw * e2.y;
+        paintedTrail += pw * CoverEntry(e, 4).xyz;
 
         if (pw > strongest)
         {
@@ -270,6 +286,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
         s.painted = CoverShape(min(s.covered, 1.0), b, s.edge) * CoverSlope(up, maxSlope * inv, slopeFade * inv);
         s.painted *= cover.tuning.z > 0.0 ? 1.0 : 0.0;
         s.rowWet *= inv;
+        paintedTrail *= inv;
         // The painted depth varied by the drifts, its z offset (below the terrain: only what rises above
         // it shows), tapering out with its share.
         float driftF = max(1.0 + driftAmount * inv * cover.tuning2.y * (s.drift * 2.0 - 1.0), 0.0);
@@ -283,6 +300,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
     {
         ivec4 looks = ivec4(regs.p[12] + 0.5);
         float lw = 0.0, sMax = 0.0, sFade = 0.0, sBreak = 0.0, sDrift = 0.0, sWet = 0.0;
+        vec3 sTrail = vec3(0.0);
 
         for (int l = 0; l < LAYERS; l++)
         {
@@ -300,6 +318,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
             sDrift += w[l] * e0.w;
             sBreak += w[l] * e2.x;
             sWet += w[l] * e2.y;
+            sTrail += w[l] * CoverEntry(e, 4).xyz;
         }
 
         float maxS = 50.0, fadeS = 15.0, breakS = 0.5, driftS = 0.35;
@@ -312,6 +331,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
             breakS = sBreak * inv;
             driftS = sDrift * inv;
             s.snowWet = sWet * inv;
+            snowTrail = sTrail * inv;
         }
 
         float driftF = max(1.0 + driftS * cover.tuning2.y * (s.drift * 2.0 - 1.0), 0.0);
@@ -322,7 +342,110 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
         s.snowHeight = depth * s.snow;
     }
 
+    // The trails' properties: by each cover's part of the height (a row without them: soft, 0.3 rim, 30 s).
+    float hp = s.paintedHeight, hs = s.snowHeight;
+
+    if (hp + hs > 0.0)
+    {
+        vec3 t = (paintedTrail * hp + snowTrail * hs) / (hp + hs);
+        s.stiffness = clamp(t.x, 0.0, 1.0);
+        s.rimShare = max(t.y, 0.0);
+        s.relax = t.z > 0.5 ? t.z : 30.0;
+    }
+
     return s;
+}
+
+// --- trails (step 5d) --------------------------------------------------------------------------------
+// One trail layer at a world point, now: the ceiling the cover was pressed down to, risen since at
+// `rise` yd/s (to `top` at most), and the rim's strength fading over `rimLife` s; bilinear between
+// texels, each texel's own state first (their times differ).
+void CoverTrailSample(sampler2D map, vec4 m, vec2 xy, float top, float rise, float rimLife, out float ceiling, out float rim)
+{
+    ceiling = top;
+    rim = 0.0;
+    int n = int(m.y + 0.5);
+
+    if (n < 1)
+    {
+        return;
+    }
+
+    vec2 c = xy / m.x - 0.5;
+    vec2 base = floor(c);
+    vec2 f = c - base;
+    ivec2 b = ivec2(base);
+    ivec2 first = ivec2(m.zw);
+    // The texel is the cell mod n, taken of a positive number: the cell plus whole windows enough for
+    // anywhere on a map (17067 yd from its middle). A negative operand's % is left to the driver, and one
+    // took it as unsigned: the fine layer (768, which doesn't divide 2^32) showed 256 cells off toward
+    // -x, -y wherever the world's coordinates are negative (2026-10-22).
+    int lift = n * (int(17100.0 / (m.x * float(n))) + 2);
+    float cs[4], rs[4];
+
+    for (int k = 0; k < 4; k++)
+    {
+        ivec2 q = b + ivec2(k & 1, k >> 1);
+        ivec2 rel = q - first;
+        cs[k] = top;
+        rs[k] = 0.0;
+
+        if (rel.x < 0 || rel.y < 0 || rel.x >= n || rel.y >= n)
+        {
+            continue;
+        }
+
+        ivec2 slot = ivec2(uvec2(q + lift) % uint(n));
+        vec4 t = texelFetch(map, slot, 0);
+
+        if (t.x < 0.5e6)
+        {
+            cs[k] = min(t.x + max(cover.trail.x - t.y, 0.0) * rise, top);
+        }
+
+        rs[k] = t.z * clamp(1.0 - max(cover.trail.x - t.w, 0.0) / rimLife, 0.0, 1.0);
+    }
+
+    ceiling = mix(mix(cs[0], cs[1], f.x), mix(cs[2], cs[3], f.x), f.y);
+    rim = mix(mix(rs[0], rs[1], f.x), mix(rs[2], rs[3], f.x), f.y);
+}
+
+// The covers' height after the trails (yd above groundZ) from what they'd be untouched (h, the spot s):
+// pressed down to where feet went (the fine layer: crisp, filling back in over the cover's relax time;
+// the coarse one: half as deep, softer, kept for the persist time), never below the terrain (bare
+// ground doesn't deform), held up by the cover's stiffness, softened at the edges the deeper the cover
+// (slurred trails in deep snow), a rim pushed up beside.
+float CoverTrailed(vec2 xy, float groundZ, float h, CoverSpot s)
+{
+    if (cover.trail.w < 0.5 || h <= 0.0)
+    {
+        return h;
+    }
+
+    float top = groundZ + h;
+    float relax = max(s.relax, 0.5);
+    float persist = max(cover.trail.y, relax);
+    float slur = clamp(h * cover.trail.z, 0.0, 0.6);
+    const vec2 taps[5] = vec2[5](vec2(0.0), vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0));
+    int count = slur > 0.02 ? 5 : 1;
+    float ceiling = 0.0, rim = 0.0;
+
+    for (int k = 0; k < count; k++)
+    {
+        vec2 p = xy + taps[k] * slur;
+        float cf, rf, cc, rc;
+        CoverTrailSample(sTrailFine, cover.trailFine, p, top, h / relax, relax, cf, rf);
+        CoverTrailSample(sTrailCoarse, cover.trailCoarse, p, top, h / persist, persist, cc, rc);
+        ceiling += min(cf, top - (top - cc) * 0.5);
+        rim += max(rf, rc * 0.5);
+    }
+
+    ceiling /= float(count);
+    rim /= float(count);
+    float stiffness = clamp(s.stiffness, 0.0, 1.0);
+    float pressed = max(groundZ, min(top, ceiling));
+    pressed = mix(pressed, top, stiffness);
+    return pressed - groundZ + rim * s.rimShare * cover.trail2.x * h * (1.0 - stiffness);
 }
 
 // The covers' height above the terrain (yd): the painted cover, fallen snow on it.
@@ -343,24 +466,24 @@ float CoverHeight(vec2 xy, float groundZ, float up, vec4 w)
 // The cover textures: one array indexed per pixel (COVER_BINDLESS: a Vulkan 1.2 device with non-uniform
 // indexing), else 16 slots the client gives to the textures in view.
 #if COVER_BINDLESS
-layout(set = 2, binding = 3) uniform sampler2D sCoverTex[1024];
+layout(set = 2, binding = 5) uniform sampler2D sCoverTex[1024];
 #else
-layout(set = 2, binding = 3) uniform sampler2D sCoverTex1;
-layout(set = 2, binding = 4) uniform sampler2D sCoverTex2;
-layout(set = 2, binding = 5) uniform sampler2D sCoverTex3;
-layout(set = 2, binding = 6) uniform sampler2D sCoverTex4;
-layout(set = 2, binding = 7) uniform sampler2D sCoverTex5;
-layout(set = 2, binding = 8) uniform sampler2D sCoverTex6;
-layout(set = 2, binding = 9) uniform sampler2D sCoverTex7;
-layout(set = 2, binding = 10) uniform sampler2D sCoverTex8;
-layout(set = 2, binding = 11) uniform sampler2D sCoverTex9;
-layout(set = 2, binding = 12) uniform sampler2D sCoverTex10;
-layout(set = 2, binding = 13) uniform sampler2D sCoverTex11;
-layout(set = 2, binding = 14) uniform sampler2D sCoverTex12;
-layout(set = 2, binding = 15) uniform sampler2D sCoverTex13;
-layout(set = 2, binding = 16) uniform sampler2D sCoverTex14;
-layout(set = 2, binding = 17) uniform sampler2D sCoverTex15;
-layout(set = 2, binding = 18) uniform sampler2D sCoverTex16;
+layout(set = 2, binding = 5) uniform sampler2D sCoverTex1;
+layout(set = 2, binding = 6) uniform sampler2D sCoverTex2;
+layout(set = 2, binding = 7) uniform sampler2D sCoverTex3;
+layout(set = 2, binding = 8) uniform sampler2D sCoverTex4;
+layout(set = 2, binding = 9) uniform sampler2D sCoverTex5;
+layout(set = 2, binding = 10) uniform sampler2D sCoverTex6;
+layout(set = 2, binding = 11) uniform sampler2D sCoverTex7;
+layout(set = 2, binding = 12) uniform sampler2D sCoverTex8;
+layout(set = 2, binding = 13) uniform sampler2D sCoverTex9;
+layout(set = 2, binding = 14) uniform sampler2D sCoverTex10;
+layout(set = 2, binding = 15) uniform sampler2D sCoverTex11;
+layout(set = 2, binding = 16) uniform sampler2D sCoverTex12;
+layout(set = 2, binding = 17) uniform sampler2D sCoverTex13;
+layout(set = 2, binding = 18) uniform sampler2D sCoverTex14;
+layout(set = 2, binding = 19) uniform sampler2D sCoverTex15;
+layout(set = 2, binding = 20) uniform sampler2D sCoverTex16;
 #endif
 
 layout(location = 11) in vec4 coverWorld;   // world position (raised onto the covers), how much the terrain faces up
@@ -582,9 +705,39 @@ float CoverWetShine(float wet, float gloss, float specularOn)
 
 // Debug views (the look's debug): 1 what lies where (red bare, green painted, white fallen snow, blue
 // water line), 2 wetness, 3 the painted entries (a colour each), 4 the maps' reach (green near, blue far,
-// grey beyond), 5 the height (black flat .. white 0.5 yd; red where the chunk isn't raised).
+// grey beyond), 5 the height (black flat .. white 0.5 yd; red where the chunk isn't raised), 6 the trails
+// as the layers hold them here (red the fine layer, green the coarse one, by how far below the ground's
+// height + 1 yd the carving went; blue the coarse one, magenta both; white / black lines the layers'
+// window edges).
 vec3 CoverDebug(CoverResult r, int view)
 {
+    if (view == 6)
+    {
+        vec2 xy = coverWorld.xy;
+        float top = coverTint.w + 1.0;
+        float cf, rf, cc, rc;
+        CoverTrailSample(sTrailFine, cover.trailFine, xy, top, 0.0, 1.0e6, cf, rf);
+        CoverTrailSample(sTrailCoarse, cover.trailCoarse, xy, top, 0.0, 1.0e6, cc, rc);
+        vec3 colour = vec3(0.35) + vec3(0.65, -0.3, -0.35) * clamp(top - cf, 0.0, 1.0) + vec3(-0.35, -0.3, 0.65) * clamp(top - cc, 0.0, 1.0);
+        vec4 layers[2] = vec4[2](cover.trailFine, cover.trailCoarse);
+        vec3 lines[2] = vec3[2](vec3(1.0), vec3(0.0));
+
+        for (int k = 0; k < 2; k++)
+        {
+            vec4 m = layers[k];
+
+            if (m.y > 0.5)
+            {
+                vec2 lo = m.zw * m.x, hi = (m.zw + m.y) * m.x;
+                vec2 d = min(abs(xy - lo), abs(xy - hi));
+                bool inside = all(greaterThanEqual(xy, lo - 0.3)) && all(lessThanEqual(xy, hi + 0.3));
+                colour = inside && min(d.x, d.y) < 0.3 ? lines[k] : colour;
+            }
+        }
+
+        return colour;
+    }
+
     if (view == 1)
     {
         vec3 colour = mix(vec3(0.35, 0.05, 0.05), vec3(0.1, 0.9, 0.1), r.painted);

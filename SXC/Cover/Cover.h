@@ -39,6 +39,21 @@ namespace SXC::Cover {
         const float* farCells = nullptr;
         uint32_t farVersion = 0;
 
+        // Trails (SXC/Cover/Trails.h): the fine and the coarse layer, with what changed since last frame
+        // (texel rectangles; or all of it).
+        struct TrailLayer {
+            uint32_t size = 0;
+            float cell = 1.0f;
+            int32_t firstI = 0, firstJ = 0;
+            const float* cells = nullptr;
+            const int32_t* rects = nullptr; // x, y, w, h per rectangle
+            uint32_t rectCount = 0;
+            bool full = true;
+        };
+        bool trails = false;
+        float trailNow = 0.0f, trailPersist = 600.0f, trailSlur = 0.6f, trailRim = 1.0f;
+        TrailLayer trailFine, trailCoarse;
+
         // The textures with a slot this frame: slot s (1..slotCount) shows texture slotTexture[s - 1]
         // (an ID, 1..) through slotGx[s - 1] (loaded); textureGloss[id - 1]: its alpha is a gloss mask.
         uint32_t slotCount = 0;

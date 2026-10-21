@@ -144,6 +144,7 @@
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #include "WarcraftXL/Seams.h"
+#include "SXC/Cover/Trails.h"  // SXC: footsteps carve the covers
 
 // STATIC: 0x00ADAC04
 static INVENTORY_SLOTS s_virtualItemInvSlots[2] = { INVSLOT_MAINHAND, INVSLOT_OFFHAND };
@@ -18601,6 +18602,7 @@ void CGUnit_C::AnimEventCallback(CM2Model* model, uint32_t boneId, uint32_t even
         unit->GetUnitName(nullptr, 1);
     }
 
+    SXC::Cover::Trails::Event(model, eventId, *position, param);  // SXC: footsteps carve the covers
     unit->HandleAnimEvent(boneId, eventId, data, position, time);
 }
 
