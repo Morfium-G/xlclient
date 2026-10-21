@@ -47,6 +47,16 @@ OUTPUTS = [
     ] + [
         ("Terrain.frag", f"kTerrainFrag{layers}{shadow}B", [f"LAYERS={layers}", f"SHADOW={shadow}", "COVER_BINDLESS=1"], "vulkan1.2")
         for layers in range(1, 5) for shadow in range(3)
+    ] + [
+        # Chunks raised onto their covers (step 5c): the vertex as it is, the subdivision, the raised
+        # points (both once per layer count: the alpha map's binding is the layer count).
+        ("TerrainPatch.vert", "kTerrainPatchVert"),
+    ] + [
+        ("Terrain.tesc", f"kTerrainTesc{layers}", [f"LAYERS={layers}"])
+        for layers in range(1, 5)
+    ] + [
+        ("Terrain.tese", f"kTerrainTese{layers}", [f"LAYERS={layers}"])
+        for layers in range(1, 5)
     ]),
 ]
 

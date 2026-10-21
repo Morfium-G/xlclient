@@ -461,6 +461,16 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
                 draw.vertexRows = pipelines::kVertexRowsSmall;
                 draw.terrainVertex = v.options;
                 draw.terrainFragment = p.options;
+
+                // A chunk that can carry depth (the cover seam's c13.x) is raised through the
+                // tessellation where the device has it, its flat self drawn a little lower first so
+                // a hairline where two chunks' covers don't meet shows ground (step 5c).
+                const float raise = reinterpret_cast<const float*>(this->m_pixelRegs)[13 * 4];
+
+                if (raise > 0.5f && gxvk::vk::cover::Tessellation() && !(v.options & pipelines::terrain::kVertexEnv)) {
+                    draw.terrainVertex |= pipelines::terrain::kVertexTess | ((p.options & pipelines::terrain::kFragmentBigAlpha) ? pipelines::terrain::kVertexBigAlpha : 0u);
+                    draw.terrainUnderlay = true;
+                }
                 // The covers' set for this frame, made now: its textures resolve like the draw's own
                 // stages, before the draw takes the pass (an inline upload may end it).
                 gxvk::vk::cover::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial());

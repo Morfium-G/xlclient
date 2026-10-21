@@ -232,6 +232,9 @@ namespace gxvk::vk::pipelines::detail
         VkShaderModule        frag[kFragmentPrograms] = {};
         VkShaderModule        terrainVert       = VK_NULL_HANDLE;   ///< SXC: Shaders/Terrain.vert
         VkShaderModule        terrainFrag[2][4][3] = {};            ///< SXC: Shaders/Terrain.frag by bindless covers, layers - 1, shadow group
+        VkShaderModule        terrainPatchVert = VK_NULL_HANDLE;    ///< SXC: raised chunks (step 5c): Shaders/TerrainPatch.vert,
+        VkShaderModule        terrainTesc[4]   = {};                ///<      Terrain.tesc by layers - 1,
+        VkShaderModule        terrainTese[4]   = {};                ///<      Terrain.tese by layers - 1 (made where the device tessellates)
         VkDescriptorSetLayout regsLayout = VK_NULL_HANDLE;    ///< set 1: one dynamic uniform buffer, both stages
         VkDescriptorPool      regsPool   = VK_NULL_HANDLE;    ///< the set-1 sets, for the session
         VkPipelineCache       cache      = VK_NULL_HANDLE;
@@ -277,12 +280,17 @@ namespace gxvk::vk::pipelines::detail
     /// returned info points into `storage`, which must outlive the pipeline's creation.
     struct TerrainSpecialization
     {
-        VkSpecializationMapEntry entries[6];
-        uint32_t                 values[6];
+        VkSpecializationMapEntry entries[8];
+        uint32_t                 values[8];
         VkSpecializationInfo     info;
     };
     const VkSpecializationInfo* VertexSpecialization(const Key& k, TerrainSpecialization& storage);
     const VkSpecializationInfo* FragmentSpecialization(const Key& k, TerrainSpecialization& storage);
+    /// SXC: a raised terrain chunk's tessellation stages (null modules for any other key); the
+    /// evaluation stage takes the vertex constants (VertexSpecialization).
+    bool TerrainTessellated(const Key& k);
+    VkShaderModule TessControlModule(const Key& k);
+    VkShaderModule TessEvalModule(const Key& k);
 
     // Layouts.cpp
     bool CreateRegsLayout();

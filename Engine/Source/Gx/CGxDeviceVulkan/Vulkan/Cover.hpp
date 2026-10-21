@@ -31,6 +31,9 @@ namespace gxvk::vk::cover
         float brightness = 0.93f, wetDarkening = 0.45f, thinDepth = 0.08f;
         float depthScale = 1.0f, breakupScale = 1.0f, driftScale = 1.0f, textureTile = 4.1666667f;
         float outside[3] = { 0.0f, 1.0f, 0.0f };   ///< beyond the far map: fallen snow, kept share, moisture above rest
+        float tessDetail = 0.0f;                   ///< raised chunks (5c): yd per segment per yd of distance; 0 = flat
+        float tessReach  = 250.0f;                 ///< yd: subdivided within this
+        float tessMost   = 16.0f;                  ///< segments per edge at most
 
         const void* entries = nullptr;             ///< 64 bytes each (sxc_cover_entry): entry k + 1 at [k]
         uint32_t    entryCount = 0;
@@ -69,6 +72,11 @@ namespace gxvk::vk::cover
     /// indexing and the limits for it), else 16 slots; and how many slots that makes.
     bool Bindless();
     uint32_t TextureSlots();
+
+    /// Whether chunks can be raised onto their covers (step 5c): the device tessellates (and the
+    /// modules came up); and the most segments per edge it allows (capped).
+    bool Tessellation();
+    float MaxTessLevel();
 
     /// Set 2's layout for the terrain pipelines (null before Init()).
     VkDescriptorSetLayout SetLayout();

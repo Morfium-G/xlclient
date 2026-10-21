@@ -276,6 +276,9 @@ bool CGxDeviceVulkan::SxcCoverFrame(gxvk::vk::cover::Frame& out) {
     out.driftScale = in.driftScale;
     out.textureTile = in.textureTile;
     std::memcpy(out.outside, in.outside, sizeof out.outside);
+    out.tessDetail = in.tessDetail;
+    out.tessReach = in.tessReach;
+    out.tessMost = in.tessMost;
     out.entries = in.entries;
     out.entryCount = in.entryCount;
     out.nearSize = in.nearSize;

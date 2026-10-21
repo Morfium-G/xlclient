@@ -242,6 +242,14 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
         return;
     }
 
+    // SXC: a raised terrain chunk: its flat self first, a little lower, under the raised surface.
+    if (d.terrainUnderlay) {
+        pipelines::Draw underlay = d;
+        underlay.terrainVertex = (d.terrainVertex & ~(pipelines::terrain::kVertexTess | pipelines::terrain::kVertexBigAlpha)) | pipelines::terrain::kVertexSunk;
+        underlay.terrainUnderlay = false;
+        pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), underlay);
+    }
+
     if (!pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), d)) {
         return;
     }

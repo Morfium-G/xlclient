@@ -51,6 +51,7 @@ namespace
         float outside[4];    ///< fallen snow, kept share, moisture above rest, near map present
         float tuning[4];     ///< thin depth (yd), 1 / texture tile (1/yd), depth scale, far map present
         float tuning2[4];    ///< breakup scale, drift scale, fallen snow on, entries
+        float tess[4];       ///< raised chunks: yd per segment per yd of distance, reach (yd), most segments per edge, on
         float texInfo[kMaxTextures / 4][4]; ///< per texture k (at [k / 4][k % 4]): its slot x 4 (0 none), + 2 gloss mask
         float entries[kMaxEntries * 4][4];
     };
@@ -79,6 +80,8 @@ namespace
         bool                  failed = false;
         bool                  bindless = false;
         uint32_t              textureSlots = kFallbackSlots;
+        bool                  tessellation = false;
+        float                 maxTessLevel = 1.0f;
         VkDevice              device = nullptr;
         const loader::Device* dapi   = nullptr;
         gxvk::vk::cover::Provider provider = nullptr;
@@ -249,6 +252,8 @@ namespace gxvk::vk::cover
     bool Ready() { return s.ready; }
     bool Bindless() { return s.ready && s.bindless; }
     uint32_t TextureSlots() { return s.ready ? s.textureSlots : 0u; }
+    bool Tessellation() { return s.ready && s.tessellation; }
+    float MaxTessLevel() { return s.maxTessLevel; }
 
     VkDescriptorSetLayout SetLayout() { return s.setLayout; }
 
@@ -290,6 +295,10 @@ namespace gxvk::vk::cover
             Write(Debug, "vulkan: cover: per-pixel texture indexing is there, but %u samplers per stage aren't (%u): 16 texture slots",
                   kTerrainSamplers + 2 + kBindlessSlots, lim.maxPerStageDescriptorSamplers);
 
+        // The raised chunks (step 5c): where the device tessellates (the caps probe enabled it).
+        s.tessellation = (context::Caps().enabled & gxvk::vk::kCapTessellation) != 0 && lim.maxTessellationGenerationLevel >= 8;
+        s.maxTessLevel = s.tessellation ? static_cast<float>(lim.maxTessellationGenerationLevel < 32 ? lim.maxTessellationGenerationLevel : 32) : 1.0f;
+
         const uint32_t bindingCount = s.bindless ? kFirstTex + 1 : kFirstTex + kFallbackSlots;
         VkDescriptorSetLayoutBinding bindings[kMaxBindings] = {};
         for (uint32_t i = 0; i < bindingCount; ++i)
@@ -298,6 +307,10 @@ namespace gxvk::vk::cover
             bindings[i].descriptorType  = i == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[i].descriptorCount = s.bindless && i == kFirstTex ? kBindlessSlots : 1;
             bindings[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            // The parameters and the maps are read where the triangles are subdivided and where the
+            // raised points are made (both take the covers' height).
+            if (s.tessellation && i < kFirstTex)
+                bindings[i].stageFlags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -347,8 +360,8 @@ namespace gxvk::vk::cover
         if (!CreateImage(1, kMapFormat, s.nearMap) || !CreateImage(1, kMapFormat, s.farMap) || !CreateImage(1, VK_FORMAT_R8G8B8A8_UNORM, s.white)) return false;
 
         s.ready = true;
-        Write(Info, "vulkan: cover: ready (%u texture slots%s, a %u-byte parameter block)", s.textureSlots, s.bindless ? ", indexed per pixel" : "",
-              static_cast<unsigned>(sizeof(Params)));
+        Write(Info, "vulkan: cover: ready (%u texture slots%s, %s, a %u-byte parameter block)", s.textureSlots, s.bindless ? ", indexed per pixel" : "",
+              s.tessellation ? "covers raise the terrain (tessellation)" : "flat covers (no tessellation)", static_cast<unsigned>(sizeof(Params)));
         return true;
     }
 
@@ -419,6 +432,10 @@ namespace gxvk::vk::cover
         p.tuning2[1] = f.driftScale;
         p.tuning2[2] = f.fallenSnow ? 1.0f : 0.0f;
         p.tuning2[3] = static_cast<float>(entries);
+        p.tess[0]    = f.tessDetail;
+        p.tess[1]    = f.tessReach;
+        p.tess[2]    = f.tessMost < s.maxTessLevel ? f.tessMost : s.maxTessLevel;
+        p.tess[3]    = on && s.tessellation && f.tessDetail > 0.0f ? 1.0f : 0.0f;
         // Per texture: the slot showing it (a loaded one), and its gloss flag.
         for (uint32_t k = 0; k < kMaxTextures; ++k)
             p.texInfo[k / 4][k % 4] = on && f.textureGloss && f.textureGloss[k] ? 2.0f : 0.0f;

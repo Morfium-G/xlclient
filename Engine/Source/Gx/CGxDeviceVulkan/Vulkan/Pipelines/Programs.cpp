@@ -98,18 +98,53 @@ namespace gxvk::vk::pipelines::detail
             for (uint32_t l = 0; l < 4; ++l)
                 for (uint32_t g = 0; g < 3; ++g)
                     if (!CreateModule(kTerrainFrags[b][l][g].words, kTerrainFrags[b][l][g].bytes, s.terrainFrag[b][l][g], "Terrain.frag")) return false;
+        // The raised chunks' stages (step 5c) only where the device tessellates.
+        if (context::Caps().enabled & gxvk::vk::kCapTessellation)
+        {
+            const TerrainFragSource tesc[4] = {
+                { kTerrainTesc1, sizeof kTerrainTesc1 }, { kTerrainTesc2, sizeof kTerrainTesc2 },
+                { kTerrainTesc3, sizeof kTerrainTesc3 }, { kTerrainTesc4, sizeof kTerrainTesc4 },
+            };
+            const TerrainFragSource tese[4] = {
+                { kTerrainTese1, sizeof kTerrainTese1 }, { kTerrainTese2, sizeof kTerrainTese2 },
+                { kTerrainTese3, sizeof kTerrainTese3 }, { kTerrainTese4, sizeof kTerrainTese4 },
+            };
+            if (!CreateModule(kTerrainPatchVert, sizeof kTerrainPatchVert, s.terrainPatchVert, "TerrainPatch.vert")) return false;
+            for (uint32_t l = 0; l < 4; ++l)
+                if (!CreateModule(tesc[l].words, tesc[l].bytes, s.terrainTesc[l], "Terrain.tesc")
+                    || !CreateModule(tese[l].words, tese[l].bytes, s.terrainTese[l], "Terrain.tese"))
+                    return false;
+        }
         return true;
     }
 
+    // Vertex constants 0..5 (the record's options), 6 the underlay, 7 big alpha; the evaluation stage of
+    // a raised chunk takes the same.
     const VkSpecializationInfo* VertexSpecialization(const Key& k, TerrainSpecialization& storage)
     {
         if (k.vertex != static_cast<uint32_t>(VertexProgram::Terrain)) return nullptr;
         const uint32_t o = k.terrainVertex;
-        const uint32_t values[6] = {
+        const uint32_t values[8] = {
             terrain::Layers(o), (o & terrain::kVertexShadow) ? 1u : 0u, (o & terrain::kVertexEnv) ? 1u : 0u,
             (o & terrain::kVertexColor) ? 1u : 0u, (o & terrain::kVertexSpecular) ? 1u : 0u, (o & terrain::kVertexPointLights) ? 1u : 0u,
+            (o & terrain::kVertexSunk) ? 1u : 0u, (o & terrain::kVertexBigAlpha) ? 1u : 0u,
         };
-        return Specialize(storage, values, 6);
+        return Specialize(storage, values, 8);
+    }
+
+    bool TerrainTessellated(const Key& k)
+    {
+        return k.vertex == static_cast<uint32_t>(VertexProgram::Terrain) && (k.terrainVertex & terrain::kVertexTess) != 0;
+    }
+
+    VkShaderModule TessControlModule(const Key& k)
+    {
+        return TerrainTessellated(k) ? s.terrainTesc[terrain::Layers(k.terrainVertex) - 1] : VK_NULL_HANDLE;
+    }
+
+    VkShaderModule TessEvalModule(const Key& k)
+    {
+        return TerrainTessellated(k) ? s.terrainTese[terrain::Layers(k.terrainVertex) - 1] : VK_NULL_HANDLE;
     }
 
     const VkSpecializationInfo* FragmentSpecialization(const Key& k, TerrainSpecialization& storage)
@@ -135,8 +170,13 @@ namespace gxvk::vk::pipelines::detail
             m = VK_NULL_HANDLE;
         }
         // SXC: our terrain shader's modules.
-        if (s.terrainVert != VK_NULL_HANDLE) s.dapi->DestroyShaderModule(s.device, s.terrainVert, nullptr);
-        s.terrainVert = VK_NULL_HANDLE;
+        VkShaderModule* singles[] = { &s.terrainVert, &s.terrainPatchVert, &s.terrainTesc[0], &s.terrainTesc[1], &s.terrainTesc[2], &s.terrainTesc[3],
+                                      &s.terrainTese[0], &s.terrainTese[1], &s.terrainTese[2], &s.terrainTese[3] };
+        for (VkShaderModule* m : singles)
+        {
+            if (*m != VK_NULL_HANDLE) s.dapi->DestroyShaderModule(s.device, *m, nullptr);
+            *m = VK_NULL_HANDLE;
+        }
         for (auto& set : s.terrainFrag)
             for (auto& row : set)
                 for (VkShaderModule& m : row)
@@ -150,7 +190,7 @@ namespace gxvk::vk::pipelines::detail
     VkShaderModule VertexModule(const Key& k)
     {
         if (k.vertex == static_cast<uint32_t>(VertexProgram::Translated)) return RecordModule(k.vertexRecord);
-        if (k.vertex == static_cast<uint32_t>(VertexProgram::Terrain)) return s.terrainVert;  // SXC:
+        if (k.vertex == static_cast<uint32_t>(VertexProgram::Terrain)) return TerrainTessellated(k) ? s.terrainPatchVert : s.terrainVert;  // SXC:
         return k.vertex < kVertexPrograms ? s.vert[k.vertex] : VK_NULL_HANDLE;
     }
 

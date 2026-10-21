@@ -79,8 +79,11 @@ namespace gxvk::vk::pipelines
     // SXC: our terrain shader's options, packed (Shaders/Terrain.vert, Terrain.frag).
     namespace terrain
     {
-        // Vertex: bits 0-1 layers - 1, 2 shadow, 3 env, 4 vertex colour, 5 specular, 6 point lights.
+        // Vertex: bits 0-1 layers - 1, 2 shadow, 3 env, 4 vertex colour, 5 specular, 6 point lights; the
+        // covers (step 5c): 7 raised through the tessellation, 8 the lowered underlay of a raised chunk,
+        // 9 big alpha (the raised points read the alpha map like the pixel record does).
         constexpr uint32_t kVertexShadow = 1u << 2, kVertexEnv = 1u << 3, kVertexColor = 1u << 4, kVertexSpecular = 1u << 5, kVertexPointLights = 1u << 6;
+        constexpr uint32_t kVertexTess = 1u << 7, kVertexSunk = 1u << 8, kVertexBigAlpha = 1u << 9;
         // Fragment: bits 0-1 layers - 1, 2-3 shadow group (0 none, 1 one cascade, 2 all), 4 big alpha,
         // 5 unlit layers, 6 nine taps (shadow mode 3).
         constexpr uint32_t kFragmentBigAlpha = 1u << 4, kFragmentUnlit = 1u << 5, kFragmentNineTaps = 1u << 6;
@@ -158,6 +161,7 @@ namespace gxvk::vk::pipelines
         const manifest::Record* fragmentRecord = nullptr;   ///< with FragmentProgram::Translated
         uint32_t terrainVertex   = 0;   ///< SXC: with VertexProgram::Terrain, terrain::kVertex* options
         uint32_t terrainFragment = 0;   ///< SXC: with FragmentProgram::Terrain, terrain::kFragment* options
+        bool     terrainUnderlay = false; ///< SXC: a raised terrain chunk: draw it flat and lowered first (kVertexSunk)
 
         /// The push constants (Shaders/Push.glsl): the transform (the row-major matrix, or c0..c3),
         /// the parameters (alpha reference, textured stages, colour ops, alpha ops) and the texture

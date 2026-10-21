@@ -19,6 +19,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/GroundEffectTextureRec.h"
+#include "WoW/Source/WorldClient/CChunkLiquid.h"
 #include "WoW/Source/WorldClient/CMapBaseObjLink.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapArea.h"
@@ -53,6 +54,7 @@ namespace {
         float cell = 1.0f;
         int32_t firstI = 0, firstJ = 0;
         uint32_t version = 1;
+        float mostFallen = 0.0f; // yd: the deepest fallen snow in it
     };
     Map s_near, s_far;
 
@@ -315,6 +317,8 @@ namespace {
     void SetMap(Map& map, const sxc_cover_map* in) {
         map.version++;
 
+        map.mostFallen = 0.0f;
+
         if (!in || in->struct_size < sizeof(sxc_cover_map) || !in->cells || in->size == 0 || in->size > SXC_COVER_MAX_MAP) {
             map.size = 0;
             map.cells.clear();
@@ -326,6 +330,10 @@ namespace {
 
         for (size_t i = 0; i < floats; i++) {
             map.cells[i] = std::isfinite(in->cells[i]) ? in->cells[i] : 0.0f;
+
+            if ((i & 3) == 0 && map.cells[i] > map.mostFallen) {
+                map.mostFallen = map.cells[i];
+            }
         }
 
         map.size = in->size;
@@ -426,6 +434,10 @@ namespace SXC::Cover {
             f.outside[k] = std::isfinite(s_look.outside[k]) ? s_look.outside[k] : 0.0f;
         }
 
+        f.tessDetail = s_look.tess_detail > 0.0f ? (s_look.tess_detail > 0.002f ? s_look.tess_detail : 0.002f) : 0.0f;
+        f.tessReach = s_look.tess_reach > 1.0f ? s_look.tess_reach : 1.0f;
+        f.tessMost = s_look.tess_most >= 1.0f ? s_look.tess_most : 1.0f;
+
         f.entries = s_entries.empty() ? nullptr : s_entries.data();
         f.entryCount = static_cast<uint32_t>(s_entries.size());
         f.entryVersion = s_entryVersion;
@@ -474,7 +486,7 @@ namespace SXC::Cover {
     }
 
     void BeforeChunkDraw(CMapRenderChunk* rc) {
-        float constants[8] = {};
+        float constants[12] = {};
 
         if (rc && s_available && s_haveLook && s_look.enabled && s_resolve) {
             s_draws++;
@@ -526,8 +538,33 @@ namespace SXC::Cover {
             }
 
             s_withCover += (constants[0] + constants[1] + constants[2] + constants[3]) > 0.0f;
+
+            // The chunk's water line beyond the near map: the lowest top of its liquids (none: far below).
+            float surface = -100000.0f;
+
+            for (CMapChunk* chunk : rc->m_mapChunks) {
+                for (CChunkLiquid* liquid = chunk ? chunk->m_liquidChunkLinkList.Head() : nullptr; liquid; liquid = chunk->m_liquidChunkLinkList.Next(liquid)) {
+                    if (std::isfinite(liquid->m_height.x) && (surface <= -100000.0f || liquid->m_height.x < surface)) {
+                        surface = liquid->m_height.x;
+                    }
+                }
+            }
+
+            constants[9] = surface;
+
+            // Depth where the chunk can have any: a painted cover with depth, or fallen snow around.
+            if (s_look.tess_detail > 0.0f && s_look.depth_scale > 0.0f) {
+                bool raised = s_look.fallen_snow && std::fmax(std::fmax(s_near.mostFallen, s_far.mostFallen), s_look.outside[0]) > 0.002f;
+
+                for (int l = 0; l < 4 && !raised; l++) {
+                    const uint32_t e = static_cast<uint32_t>(constants[l]);
+                    raised = e >= 1 && e <= s_entries.size() && s_entries[e - 1].depth > 0.0f;
+                }
+
+                constants[8] = raised ? 1.0f : 0.0f;
+            }
         }
 
-        GxShaderConstantsSet(GxSh_Pixel, 11, constants, 2);
+        GxShaderConstantsSet(GxSh_Pixel, 11, constants, 3);
     }
 }

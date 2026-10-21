@@ -8,7 +8,7 @@
  * time comes as coarse maps: fallen snow, painted snow's melt, the ground's wetness and the water line,
  * near the player on a fine grid, per terrain chunk beyond it, one value beyond that. Per spot the
  * covers stack: the painted cover below, fallen snow on top, the ground showing through where they're
- * thin.
+ * thin. Where the GPU tessellates, the stack's height raises the terrain itself (the look's tess_*).
  *
  * Vulkan only (our terrain shader, [Terrain] OurShader): on another renderer available() answers false.
  */
@@ -54,7 +54,8 @@ typedef struct sxc_cover_entry
     float    rest_moisture; ///< its ground's rest moisture (the maps carry the moisture above rest)
     int32_t  texture;       ///< 0 = plain (the look's brightness), 1..SXC_COVER_MAX_TEXTURES
     uint32_t flags;         ///< SXC_COVER_*
-    float    reserved[2];
+    float    z_offset;      ///< yd the cover's base sits above (+) or below (-) the terrain: below, only what rises above it shows
+    float    reserved;
 } sxc_cover_entry;
 
 typedef struct sxc_cover_layer
@@ -103,7 +104,7 @@ typedef struct sxc_cover_look
     uint32_t struct_size;
     wxl_bool enabled;
     wxl_bool fallen_snow;     ///< fallen snow drawn on top
-    int32_t  debug;           ///< 0 off, 1 what lies where, 2 wetness, 3 entries, 4 the maps' reach
+    int32_t  debug;           ///< 0 off, 1 what lies where, 2 wetness, 3 entries, 4 the maps' reach, 5 the height
     float    brightness;      ///< a plain cover's colour (no texture), 0..1
     float    wet_darkening;   ///< how much darker soaked ground gets (0..1)
     float    thin_depth;      ///< yd: fallen snow hides the ground below from this depth
@@ -112,6 +113,12 @@ typedef struct sxc_cover_look
     float    drift_scale;     ///< x every drift
     float    texture_tile;    ///< yd per repeat of a cover texture; 0 = 4.1667 (the terrain layers')
     float    outside[3];      ///< beyond the far map: fallen snow, kept share, moisture above rest
+    /// Depth (the terrain raised onto its covers by tessellation, where the GPU has it): a segment of the
+    /// subdivided terrain is about this many yd per yd of distance from the camera (smaller: finer, more
+    /// GPU); 0 = flat covers (the look only).
+    float    tess_detail;
+    float    tess_reach;      ///< yd: the terrain is subdivided within this distance (beyond, raised at its own vertices)
+    float    tess_most;       ///< segments per triangle edge at most (the GPU's limit caps it)
 } sxc_cover_look;
 
 typedef struct sxc_cover_api

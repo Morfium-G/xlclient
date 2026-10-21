@@ -386,8 +386,18 @@ namespace
             return false;
         }
 
+        // SXC: a raised terrain chunk (step 5c) runs through the tessellation: triangles as patches of 3.
+        const bool tessellated = TerrainTessellated(k);
+        const VkShaderModule tesc = TessControlModule(k), tese = TessEvalModule(k);
+        if (tessellated && (tesc == VK_NULL_HANDLE || tese == VK_NULL_HANDLE || topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
+        {
+            Refuse(k, "a raised terrain chunk without the tessellation modules, or not a triangle list");
+            return false;
+        }
+        if (tessellated) topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+
         TerrainSpecialization vertexConstants, fragmentConstants;  // SXC: our terrain shader's options
-        VkPipelineShaderStageCreateInfo stages[2] = {};
+        VkPipelineShaderStageCreateInfo stages[4] = {};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
         stages[0].module = vert;
@@ -398,6 +408,22 @@ namespace
         stages[1].module = frag;
         stages[1].pName  = "main";
         stages[1].pSpecializationInfo = FragmentSpecialization(k, fragmentConstants);
+        if (tessellated)
+        {
+            stages[2].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[2].stage  = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+            stages[2].module = tesc;
+            stages[2].pName  = "main";
+            stages[2].pSpecializationInfo = stages[0].pSpecializationInfo;  // big alpha (it reads the alpha map)
+            stages[3].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[3].stage  = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+            stages[3].module = tese;
+            stages[3].pName  = "main";
+            stages[3].pSpecializationInfo = stages[0].pSpecializationInfo;  // the vertex math runs there
+        }
+        VkPipelineTessellationStateCreateInfo tessellation = {};
+        tessellation.sType              = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+        tessellation.patchControlPoints = 3;
 
         VkVertexInputBindingDescription bindings[kMaxStreams + 1] = {};
         uint32_t bindingCount = 0;
@@ -468,10 +494,11 @@ namespace
 
         VkGraphicsPipelineCreateInfo info = {};
         info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        info.stageCount          = 2;
+        info.stageCount          = tessellated ? 4 : 2;
         info.pStages             = stages;
         info.pVertexInputState   = &vertexInput;
         info.pInputAssemblyState = &assembly;
+        info.pTessellationState  = tessellated ? &tessellation : nullptr;
         info.pViewportState      = &viewport;
         info.pRasterizationState = &raster;
         info.pMultisampleState   = &multisample;

@@ -4,6 +4,7 @@
 // shader's {set 0, set 1, the covers' set 2}).
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
 namespace gxvk::vk::pipelines::detail
 {
@@ -16,6 +17,9 @@ namespace gxvk::vk::pipelines::detail
         binding.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         binding.descriptorCount = 1;
         binding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        // SXC: a raised terrain chunk's tessellation stages read the registers too (step 5c).
+        if (context::Caps().enabled & gxvk::vk::kCapTessellation)
+            binding.stageFlags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         VkDescriptorSetLayoutCreateInfo layout = {};
         layout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         layout.bindingCount = 1;
@@ -74,6 +78,9 @@ namespace gxvk::vk::pipelines::detail
             b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b.descriptorCount = 1;
             b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            // SXC: our terrain's tessellation reads the alpha map (step 5c: where cover lies, its height).
+            if (cover && (context::Caps().enabled & gxvk::vk::kCapTessellation))
+                b.stageFlags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

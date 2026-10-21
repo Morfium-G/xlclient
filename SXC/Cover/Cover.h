@@ -22,6 +22,7 @@ namespace SXC::Cover {
         float brightness = 0.93f, wetDarkening = 0.45f, thinDepth = 0.08f;
         float depthScale = 1.0f, breakupScale = 1.0f, driftScale = 1.0f, textureTile = 33.3333333f / 8.0f;
         float outside[3] = { 0.0f, 1.0f, 0.0f };
+        float tessDetail = 0.0f, tessReach = 250.0f, tessMost = 16.0f; // depth (sxc_cover_look::tess_*); detail 0 = flat
 
         const void* entries = nullptr;    // sxc_cover_entry[entryCount]: entry k + 1 at [k]
         uint32_t entryCount = 0, entryVersion = 0;
@@ -55,7 +56,9 @@ namespace SXC::Cover {
     const Frame& Current();
 
     // The seam: CMapRenderChunk::RenderSinglePassVertexPixelShader, before the draw. Sets pixel
-    // constants c11 (each layer's painted entry) and c12 (each layer's fallen-snow look), asking the
-    // mod's resolver the first time a chunk is met, and counts the textures the chunk shows.
+    // constants c11 (each layer's painted entry), c12 (each layer's fallen-snow look), c13.x (1: the
+    // chunk can carry depth, so the device raises it) and c13.y (its liquids' lowest top: the water line
+    // beyond the near map), asking the mod's resolver the first time a chunk is met, and counts the
+    // textures the chunk shows.
     void BeforeChunkDraw(CMapRenderChunk* chunk);
 }
