@@ -93,7 +93,7 @@ namespace {
     uint64_t s_resolved = 0, s_draws = 0, s_withCover = 0;
 
     Frame s_frame;
-    char s_status[512] = "";
+    char s_status[1024] = "";
 
     void Release(Texture& t) {
         if (t.texture) {
@@ -380,12 +380,29 @@ namespace {
                           s_wanted, s_slots, s_unslotted);
         }
 
-        char trails[120] = "trails off";
+        char trails[400] = "trails off";
 
         if (s_look.trails) {
             const Trails::Stats t = Trails::GetStats();
-            std::snprintf(trails, sizeof(trails), "trails: %u feet followed, %u carvings last frame, %llu footsteps", t.feet, t.stamps,
-                          static_cast<unsigned long long>(t.footsteps));
+            int at = std::snprintf(trails, sizeof(trails), "trails: %u feet followed, %u carvings last frame, %llu footsteps", t.feet, t.stamps,
+                                   static_cast<unsigned long long>(t.footsteps));
+
+            // Your feet: the event and bone each follows, and where it is now (yd ahead, to the left, up).
+            for (int k = 0; k < 2 && at > 0 && at < static_cast<int>(sizeof(trails)); k++) {
+                const Trails::FootView& v = t.player[k];
+
+                if (!v.known) {
+                    at += std::snprintf(trails + at, sizeof(trails) - at, "\nyour %s foot: not known yet", k ? "right" : "left");
+                    continue;
+                }
+
+                const char e[5] = { static_cast<char>(v.event & 0xFF), static_cast<char>((v.event >> 8) & 0xFF), static_cast<char>((v.event >> 16) & 0xFF),
+                                    static_cast<char>((v.event >> 24) & 0xFF), 0 };
+                at += std::snprintf(trails + at, sizeof(trails) - at,
+                                    "\nyour %s foot (last step %s): bone %u (key %d, parent %d), %.2f below its joint: %+.2f ahead, %+.2f left, %+.2f up",
+                                    k ? "right" : "left", e, v.bone, v.keyBone, v.parent == 0xFFFF ? -1 : static_cast<int>(v.parent), v.sole, v.forward,
+                                    v.left, v.up);
+            }
         }
 
         std::snprintf(s_status, sizeof(s_status), "%s; chunks drawn %llu (%llu with cover), resolved %llu, %u entries; %s; %s", s_deviceStatus ? s_deviceStatus() : "",
@@ -451,6 +468,8 @@ namespace SXC::Cover {
         Trails::Settings trails;
         trails.on = s_look.trails != 0 && f.tessDetail > 0.0f;
         trails.reach = s_look.trail_reach > 1.0f ? s_look.trail_reach : 1.0f;
+        trails.carve = s_look.trail_carve;
+        trails.lift = s_look.trail_lift > 0.0f ? s_look.trail_lift : 0.0f;
         Trails::Update(trails);
         f.trails = trails.on;
         f.trailNow = Trails::Now();

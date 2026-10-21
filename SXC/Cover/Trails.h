@@ -13,9 +13,12 @@ class CM2Model;
 // 1e6 untouched) and when, the rim's strength (0..1) and when. The terrain's tessellation reads them
 // and lets the ceiling rise back over time (Shaders/TerrainCover.glsl), so nothing here relaxes cells.
 //
-// Feet are found from the units' own footstep events (the client's footprints use them): an event names
-// a bone and a contact point on it (CM2Model::FindEvent), which is followed every frame from then on;
-// the foot carves wherever it passes, so a foot dragged through deep snow leaves a furrow.
+// Feet are found from the units' own footstep events (the client's footprints use them). An event's own
+// bone is a marker (player models: one per animation under the root, where a step lands; it doesn't move
+// with the leg), so at a unit's first step with a foot the skeleton's joint nearest the landing point is
+// taken as that foot and followed every frame from then on (its height above the sole at that step taken
+// off); the event itself then only tells when the foot is down. Where the foot carves: sxc_cover.h's
+// SXC_COVER_CARVE_*.
 namespace SXC::Cover::Trails {
     constexpr float kUntouched = 1.0e6f;
 
@@ -36,6 +39,8 @@ namespace SXC::Cover::Trails {
     struct Settings {
         bool on = false;
         float reach = 45.0f;     // yd: units this close to the player carve
+        int carve = 0;           // SXC_COVER_CARVE_* (sxc_cover.h)
+        float lift = 0.3f;       // yd: SXC_COVER_CARVE_UP_TO's height
     };
 
     // The footstep seam: CGUnit_C::AnimEventCallback, for every event (non-footsteps are ignored).
@@ -52,10 +57,22 @@ namespace SXC::Cover::Trails {
     // Seconds the trails' clock has run (the shader's "now").
     float Now();
 
+    // One of the player's feet as followed this frame (what a model's footstep events tie it to).
+    struct FootView {
+        bool known = false;
+        uint32_t event = 0;      // the last footstep event's id (four characters, "$FL0")
+        uint16_t bone = 0;       // the bone it follows (the foot's joint, found at its first step)
+        float sole = 0.0f;       // yd the followed point lies below that joint
+        int32_t keyBone = -1;    // that bone's key-bone id (-1 none)
+        uint16_t parent = 0xFFFF;
+        float forward = 0.0f, left = 0.0f, up = 0.0f; // yd from the unit's position, in its facing
+    };
+
     struct Stats {
         uint32_t feet = 0;       // feet followed now
         uint32_t stamps = 0;     // carvings last frame
         uint64_t footsteps = 0;  // footstep events seen
+        FootView player[2];      // left, right
     };
     Stats GetStats();
 

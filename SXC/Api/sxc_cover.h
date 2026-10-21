@@ -109,7 +109,7 @@ typedef struct sxc_cover_look
     uint32_t struct_size;
     wxl_bool enabled;
     wxl_bool fallen_snow;     ///< fallen snow drawn on top
-    int32_t  debug;           ///< 0 off, 1 what lies where, 2 wetness, 3 entries, 4 the maps' reach, 5 the height
+    int32_t  debug;           ///< 0 off, 1 what lies where, 2 wetness, 3 entries, 4 the maps' reach, 5 the height, 6 trails
     float    brightness;      ///< a plain cover's colour (no texture), 0..1
     float    wet_darkening;   ///< how much darker soaked ground gets (0..1)
     float    thin_depth;      ///< yd: fallen snow hides the ground below from this depth
@@ -132,7 +132,20 @@ typedef struct sxc_cover_look
     float    trail_slur;      ///< how much deeper cover softens a trail's edges (radius per yd of depth)
     float    trail_rim;       ///< x every rim
     float    trail_reach;     ///< yd: units within this of the player leave trails
+    /// Where a followed foot carves (the cover is only ever pressed down to the foot's own height, so a
+    /// foot above the surface leaves nothing): SXC_COVER_CARVE_*.
+    int32_t  trail_carve;
+    float    trail_lift;      ///< yd above the unit: SXC_COVER_CARVE_UP_TO's height
 } sxc_cover_look;
+
+/// Wherever the foot is (up to 1.5 yd above the unit: not while jumping): its swing through deep cover
+/// leaves a drag line between the prints; rims only near contact.
+#define SXC_COVER_CARVE_THROUGH 0
+/// Only near contact (within 0.1 yd of the height it had at its last footstep, relative to the unit):
+/// clean prints.
+#define SXC_COVER_CARVE_CONTACT 1
+/// Up to trail_lift above the unit, rims everywhere (the first version's rule, 0.3 yd).
+#define SXC_COVER_CARVE_UP_TO   2
 
 typedef struct sxc_cover_api
 {

@@ -10,6 +10,7 @@
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "SXC/Api/sxc_cover.h"
 #include "SXC/Log.h"
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include "WoW/Source/Object/ObjectClient/Unit_C.h"
@@ -32,7 +33,8 @@ namespace {
     constexpr float kRimLife = 30.0f;       // s: the same for the rim's strength
     constexpr float kRimWidth = 0.7f;       // the rim reaches this share of the radius beyond the foot
     constexpr float kBowl = 0.35f;          // the print's floor rises toward its edge by this share of the radius
-    constexpr float kFootAboveGround = 0.3f; // yd above the unit's feet level: a foot higher is in the air
+    constexpr float kThroughMost = 1.5f;    // yd above the unit: higher, a foot is in the air (a jump), whatever the mode
+    constexpr float kContactBand = 0.1f;    // yd above the foot's height at its last footstep: still in contact
 
     Layer s_fine, s_coarse;
     bool s_haveWindow = false;
@@ -40,8 +42,13 @@ namespace {
 
     struct Foot {
         bool known = false;
+        uint32_t event = 0;
         uint16_t bone = 0;
-        C3Vector offset;   // the contact point on the bone (the footstep event's position)
+        // The point followed on the bone, model space: the foot's joint (the bone's pivot), found at the
+        // first footstep; else the footstep event's own point.
+        C3Vector offset;
+        float sole = 0.0f; // yd the joint sat above the ground at that footstep: the point is this far below it
+        float contactLift = 0.0f; // yd the contact point was above the unit at its last footstep
         C3Vector last;
         bool haveLast = false;
     };
@@ -171,8 +178,9 @@ namespace {
         L.version++;
     }
 
-    // A foot's print: pressed down to `bottom` (its floor rising toward the edge), a rim beside it.
-    void Stamp(Layer& L, float x, float y, float bottom, float radius, float now) {
+    // A foot's print: pressed down to `bottom` (its floor rising toward the edge), a rim beside it (unless
+    // `rim` is false: a foot dragged through the cover between steps).
+    void Stamp(Layer& L, float x, float y, float bottom, float radius, float now, bool rim) {
         if (L.size == 0) {
             return;
         }
@@ -222,7 +230,7 @@ namespace {
 
                 // The rim: not inside a trail that's deeper than this print (walking leaves no rims in
                 // its own track).
-                if (ceiling < bottom + r) {
+                if (!rim || ceiling < bottom + r) {
                     continue;
                 }
 
@@ -244,13 +252,13 @@ namespace {
         }
     }
 
-    void StampBoth(float x, float y, float bottom, float radius, float now) {
-        Stamp(s_fine, x, y, bottom, radius, now);
-        Stamp(s_coarse, x, y, bottom, radius, now);
+    void StampBoth(float x, float y, float bottom, float radius, float now, bool rim) {
+        Stamp(s_fine, x, y, bottom, radius, now, rim);
+        Stamp(s_coarse, x, y, bottom, radius, now, rim);
     }
 
     // A foot moved from a to b: prints along the way, close enough to make a furrow.
-    void StampPath(const C3Vector& a, const C3Vector& b, float radius, float now) {
+    void StampPath(const C3Vector& a, const C3Vector& b, float radius, float now, bool rim) {
         const float dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
         const float length = std::sqrt(dx * dx + dy * dy);
         const float spacing = radius * 0.5f > kFineCell ? radius * 0.5f : kFineCell;
@@ -258,10 +266,10 @@ namespace {
 
         for (int k = 1; k <= steps; k++) {
             const float t = static_cast<float>(k) / (steps + 1);
-            StampBoth(a.x + dx * t, a.y + dy * t, a.z + dz * t, radius, now);
+            StampBoth(a.x + dx * t, a.y + dy * t, a.z + dz * t, radius, now, rim);
         }
 
-        StampBoth(b.x, b.y, b.z, radius, now);
+        StampBoth(b.x, b.y, b.z, radius, now, rim);
     }
 
     // A footstep event: "$" + B/F/R/S/W + L/R + 0..3 (CGUnit_C::HandleAnimEvent's footstep cases).
@@ -287,6 +295,55 @@ namespace {
         const float longer = size[0] > size[1] ? size[0] : size[1];
         const float r = longer > 0.0f ? longer * 0.6f : 0.2f;
         return r < 0.1f ? 0.1f : (r > 2.0f ? 2.0f : r);
+    }
+
+    // A followed foot's point in the world now.
+    C3Vector FootPoint(const CM2Model* model, const Foot& f) {
+        C3Vector p = f.offset * model->m_boneMatrices[f.bone] * model->m_scene->m_viewInv;
+        p.z -= f.sole;
+        return p;
+    }
+
+    // The foot that landed at `contact` (a footstep event's point): the models' footstep events sit on
+    // bones of their own (player models: one per animation, under the root, ahead of or behind the unit;
+    // they mark where a step lands and don't move with the leg), so the foot is the skeleton's joint nearest
+    // to that point, close to the ground, on its own side of the skeleton (a model faces +x, its left is +y:
+    // the markers of both feet lie near the middle, nearer the other foot at times) and not the other
+    // foot's. False: none near (the event's own point is followed then).
+    bool FindFoot(const CM2Model* model, const C3Vector& contact, float radius, int side, const Foot& other, Foot& f) {
+        const M2Data* d = model->m_shared->m_data;
+        const float most = 0.6f + radius;
+        float best = most * most;
+        bool found = false;
+
+        for (uint32_t i = 0; i < d->m_bones.m_count; i++) {
+            bool marker = false;
+
+            for (uint32_t e = 0; e < d->m_events.m_count && !marker; e++) {
+                marker = d->m_events[e].m_bone == i;
+            }
+
+            const float rest = d->m_bones[i].m_pivot.y;
+
+            if (marker || (side == 0 ? rest <= 0.01f : rest >= -0.01f) || (other.known && other.bone == i)) {
+                continue;
+            }
+
+            const C3Vector p = d->m_bones[i].m_pivot * model->m_boneMatrices[i] * model->m_scene->m_viewInv;
+            const float dx = p.x - contact.x, dy = p.y - contact.y, dz = p.z - contact.z;
+
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || dz < -0.15f || dz > 0.4f || dx * dx + dy * dy >= best) {
+                continue;
+            }
+
+            best = dx * dx + dy * dy;
+            f.bone = static_cast<uint16_t>(i);
+            f.offset = d->m_bones[i].m_pivot;
+            f.sole = dz > 0.0f ? dz : 0.0f;
+            found = true;
+        }
+
+        return found;
     }
 
     float Clock() {
@@ -340,24 +397,38 @@ namespace SXC::Cover::Trails {
         }
 
         w.radius = FootRadius(unit);
+        const C3Vector at = unit->GetPosition();
         C3Vector* offset = nullptr;
         uint16_t bone = 0;
+        Foot& f = w.feet[foot];
+        const bool posed = model->m_boneMatrices && model->m_scene && model->m_shared && model->m_shared->m_data;
 
-        if (model->FindEvent(eventId, &offset, &bone) && offset) {
-            Foot& f = w.feet[foot];
+        // The foot is found once per unit and model (its first step with that foot); every step after
+        // only tells when the foot is down.
+        if (!f.known && posed && model->FindEvent(eventId, &offset, &bone) && offset) {
+            if (!FindFoot(model, position, w.radius, foot, w.feet[1 - foot], f)) {
+                f.bone = bone;
+                f.offset = *offset;
+                f.sole = 0.0f;
+            }
+
             f.known = true;
-            f.bone = bone;
-            f.offset = *offset;
             f.haveLast = false;
         }
 
-        if (NearUnit("footstep", guid, model, unit->GetPosition(), position, w.radius)) {
-            StampBoth(position.x, position.y, position.z, w.radius, Clock());
+        f.event = eventId;
+        const C3Vector down = f.known && posed && f.bone < model->m_shared->m_data->m_bones.m_count ? FootPoint(model, f) : position;
+        f.contactLift = down.z - at.z;
+
+        if (NearUnit("footstep", guid, model, at, down, w.radius)) {
+            StampBoth(down.x, down.y, down.z, w.radius, Clock(), true);
         }
     }
 
     void Update(const Settings& settings) {
         s_stats.stamps = 0;
+        s_stats.player[0] = FootView{};
+        s_stats.player[1] = FootView{};
 
         if (!settings.on) {
             if (s_settings.on) {
@@ -412,16 +483,48 @@ namespace SXC::Cover::Trails {
                 continue;
             }
 
-            for (Foot& f : w.feet) {
+            for (int k = 0; k < 2; k++) {
+                Foot& f = w.feet[k];
+
                 if (!f.known || !usable || f.bone >= model->m_shared->m_data->m_bones.m_count) {
                     f.haveLast = false;
                     continue;
                 }
 
                 feet++;
-                const C3Vector world = f.offset * model->m_boneMatrices[f.bone] * model->m_scene->m_viewInv;
+                const C3Vector world = FootPoint(model, f);
 
-                if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z) || world.z > at.z + kFootAboveGround ||
+                // The player's feet, where they are around the player (the Cover panel's status line).
+                if (unit == static_cast<CGUnit_C*>(player)) {
+                    const M2CompBone& b = model->m_shared->m_data->m_bones[f.bone];
+                    const float facing = unit->GetFacing(), fx = world.x - at.x, fy = world.y - at.y;
+                    FootView& v = s_stats.player[k];
+                    v.known = true;
+                    v.event = f.event;
+                    v.bone = f.bone;
+                    v.sole = f.sole;
+                    v.keyBone = static_cast<int32_t>(b.m_boneId);
+                    v.parent = b.m_parentIndex;
+                    v.forward = fx * std::cos(facing) + fy * std::sin(facing);
+                    v.left = -fx * std::sin(facing) + fy * std::cos(facing);
+                    v.up = world.z - at.z;
+                }
+
+                // Where it carves (the cover is pressed only down to the foot, so above the surface it
+                // leaves nothing anyway): through the cover, near contact, or up to a height.
+                const float lift = world.z - at.z;
+                const bool contact = lift <= f.contactLift + kContactBand;
+                bool carves = lift <= kThroughMost;
+                bool rim = contact;
+
+                if (settings.carve == SXC_COVER_CARVE_CONTACT) {
+                    carves = contact;
+                } else if (settings.carve == SXC_COVER_CARVE_UP_TO) {
+                    carves = lift <= settings.lift;
+                    rim = true;
+                }
+
+                if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z) || !carves ||
                     !NearUnit("followed", it->first, model, at, world, w.radius)) {
                     f.haveLast = false;
                     continue;
@@ -430,9 +533,9 @@ namespace SXC::Cover::Trails {
                 const float mx = world.x - f.last.x, my = world.y - f.last.y;
 
                 if (f.haveLast && mx * mx + my * my < 9.0f) {
-                    StampPath(f.last, world, w.radius, now);
+                    StampPath(f.last, world, w.radius, now, rim);
                 } else {
-                    StampBoth(world.x, world.y, world.z, w.radius, now);
+                    StampBoth(world.x, world.y, world.z, w.radius, now, rim);
                 }
 
                 f.last = world;
