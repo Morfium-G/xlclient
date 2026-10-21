@@ -36,6 +36,8 @@ namespace gxvk::vk
         /// SXC: shaderSampledImageArrayNonUniformIndexing (a 1.2 device): a sampler array indexed per pixel
         /// ("bindless"; the terrain's cover textures, Vulkan/Cover)
         kCapSampledArrayNonUniform = 1u << 16,
+        /// SXC: tessellationShader (the terrain raised onto its covers, Vulkan/Cover, step 5c)
+        kCapTessellation     = 1u << 17,
     };
 
     /// What the probe found and the device was created with. Zeroed (a 1.0 device, nothing optional)
