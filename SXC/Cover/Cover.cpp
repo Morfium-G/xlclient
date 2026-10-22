@@ -384,8 +384,8 @@ namespace {
 
         if (s_look.trails) {
             const Trails::Stats t = Trails::GetStats();
-            int at = std::snprintf(trails, sizeof(trails), "trails: %u feet followed, %u carvings last frame, %llu footsteps", t.feet, t.stamps,
-                                   static_cast<unsigned long long>(t.footsteps));
+            int at = std::snprintf(trails, sizeof(trails), "trails: %u feet and %u body parts followed, %u carvings last frame, %llu footsteps", t.feet,
+                                   t.parts, t.stamps, static_cast<unsigned long long>(t.footsteps));
 
             // Your feet: the event and bone each follows, and where it is now (yd ahead, to the left, up).
             for (int k = 0; k < 2 && at > 0 && at < static_cast<int>(sizeof(trails)); k++) {
@@ -470,6 +470,22 @@ namespace SXC::Cover {
         trails.reach = s_look.trail_reach > 1.0f ? s_look.trail_reach : 1.0f;
         trails.carve = s_look.trail_carve;
         trails.lift = s_look.trail_lift > 0.0f ? s_look.trail_lift : 0.0f;
+
+        // The deepest any cover is now (the entries' depths and fallen snow at their most drifted, x the
+        // look's scale, a margin): a carving point higher above its unit can't reach a cover.
+        {
+            const float scale = s_look.depth_scale > 0.0f ? s_look.depth_scale : 0.0f;
+            float painted = 0.0f, drift = 0.35f;
+
+            for (const sxc_cover_entry& e : s_entries) {
+                const float d = e.depth * (1.0f + std::fmax(e.drift, 0.0f) * s_look.drift_scale) * scale + std::fmax(e.z_offset, 0.0f);
+                painted = std::fmax(painted, d);
+                drift = std::fmax(drift, e.drift);
+            }
+
+            const float fallen = s_look.fallen_snow ? std::fmax(std::fmax(s_near.mostFallen, s_far.mostFallen), s_look.outside[0]) : 0.0f;
+            trails.deepest = std::fmax(painted, fallen * (1.0f + drift * s_look.drift_scale) * scale) + 0.1f;
+        }
         Trails::Update(trails);
         f.trails = trails.on;
         f.trailNow = Trails::Now();

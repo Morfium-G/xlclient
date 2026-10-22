@@ -41,6 +41,7 @@ namespace SXC::Cover::Trails {
         float reach = 45.0f;     // yd: units this close to the player carve
         int carve = 0;           // SXC_COVER_CARVE_* (sxc_cover.h)
         float lift = 0.3f;       // yd: SXC_COVER_CARVE_UP_TO's height
+        float deepest = 2.0f;    // yd: the deepest any cover is now; a point higher above its unit isn't written
     };
 
     // The footstep seam: CGUnit_C::AnimEventCallback, for every event (non-footsteps are ignored).
@@ -70,6 +71,7 @@ namespace SXC::Cover::Trails {
 
     struct Stats {
         uint32_t feet = 0;       // feet followed now
+        uint32_t parts = 0;      // body parts followed now (hands, hips, chest)
         uint32_t stamps = 0;     // carvings last frame
         uint64_t footsteps = 0;  // footstep events seen
         FootView player[2];      // left, right
