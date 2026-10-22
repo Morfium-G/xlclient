@@ -34,9 +34,13 @@ namespace
     using gxvk::vk::ResultName;
 
     constexpr uint32_t kSlots      = frame::kFramesInFlight;
-    /// Bindings: 0 parameters, 1 near map, 2 far map, 3 and 4 the trails (fine, coarse), then the
-    /// textures: one array at 5 (bindless), or one binding per slot from 5.
-    constexpr uint32_t kFirstTex   = 5;
+    /// Bindings: 0 parameters, 1 near map, 2 far map, 3 and 4 the trails (fine, coarse), 5 the surface
+    /// grid (a storage image the pixels write), then the textures: one array at 6 (bindless), or one
+    /// binding per slot from 6.
+    constexpr uint32_t kSurfaceBinding = 5;
+    constexpr uint32_t kFirstTex   = 6;
+    constexpr uint32_t kMapSamplers = 4;                         ///< bindings 1..4
+    constexpr uint32_t kSurfaceSize = gxvk::vk::cover::kSurfaceSize;
     constexpr uint32_t kEntryRows  = 5;                          ///< vec4 per entry (sxc_cover_entry, 80 bytes)
     constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots;
     constexpr uint32_t kTerrainSamplers = 9;                     ///< set 0 of the terrain modules: 4 layers, the alpha map, 4 cascades
@@ -57,6 +61,7 @@ namespace
         float trailCoarse[4];
         float trail[4];      ///< now (s), persist (s), slur (yd per yd of depth), on
         float trail2[4];     ///< rim scale, 0, 0, 0
+        float surface[4];    ///< the surface grid: cell (yd), size (0 none), first i, first j
         float texInfo[kMaxTextures / 4][4]; ///< per texture k (at [k / 4][k % 4]): its slot x 4 (0 none), + 2 gloss mask
         float entries[kMaxEntries * kEntryRows][4];
     };
@@ -77,6 +82,8 @@ namespace
         uint64_t        serial = 0;   ///< the frame the set was written for
         uint32_t        written[kBindlessSlots] = {};  ///< the image IDs its texture bindings hold (0 the white one; never reused, unlike view handles)
         bool            texturesWritten = false;
+        memory::Buffer  surfaceRead;               ///< the surface grid as this slot's frame copied it (Readback memory)
+        bool            surfacePending = false;    ///< a copy was recorded into it: read when the slot comes round again
     };
 
     struct State
@@ -101,6 +108,7 @@ namespace
         bool     nearPresent = false, farPresent = false;
         Image    trailMaps[2];                ///< fine, coarse
         bool     trailPresent[2] = {};
+        Image    surface;                     ///< the surface grid (storage, GENERAL once cleared)
         VkPipelineStageFlags readers = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; ///< the stages that read the maps
 
         char status[200] = "no terrain drawn yet";
@@ -123,7 +131,8 @@ namespace
         img = Image();
     }
 
-    bool CreateImage(uint32_t size, VkFormat format, Image& out)
+    bool CreateImage(uint32_t size, VkFormat format, Image& out,
+                     VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
     {
         VkImageCreateInfo info = {};
         info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -134,7 +143,7 @@ namespace
         info.arrayLayers   = 1;
         info.samples       = VK_SAMPLE_COUNT_1_BIT;
         info.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        info.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        info.usage         = usage;
         info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (!Check(s.dapi->CreateImage(s.device, &info, nullptr, &out.image), "vkCreateImage")) return false;
@@ -334,10 +343,19 @@ namespace gxvk::vk::cover
         h->iapi->GetPhysicalDeviceProperties(h->physical, &props);
         const VkPhysicalDeviceLimits& lim = props.limits;
         auto fits = [&](uint32_t slots) {
-            const uint32_t samplers = kTerrainSamplers + (kFirstTex - 1) + slots;
-            return lim.maxPerStageDescriptorSamplers >= samplers && lim.maxPerStageDescriptorSampledImages >= samplers && lim.maxPerStageResources >= samplers + 2 &&
+            const uint32_t samplers = kTerrainSamplers + kMapSamplers + slots;
+            return lim.maxPerStageDescriptorSamplers >= samplers && lim.maxPerStageDescriptorSampledImages >= samplers && lim.maxPerStageResources >= samplers + 3 &&
                    lim.maxDescriptorSetSamplers >= samplers && lim.maxDescriptorSetSampledImages >= samplers;
         };
+
+        // The terrain's pixels write the surface grid (step 5e): every desktop GPU can; without it the
+        // terrain stays on the stock shaders, like a device short of samplers.
+        if (!(context::Caps().enabled & gxvk::vk::kCapFragmentStores))
+        {
+            Write(Warn, "vulkan: cover: the device can't store from pixel shaders (fragmentStoresAndAtomics); the terrain stays on the stock shaders, without covers");
+            s.failed = true;
+            return false;
+        }
         static SXC::Settings::Bool s_force16("Terrain", "CoverSlots16", false, "Cover textures: 16 slots",
                                              "Use the 16 texture slots of GPUs without per-pixel indexing even where it's there (testing the older path). "
                                              "Takes effect at the next start.");
@@ -347,13 +365,13 @@ namespace gxvk::vk::cover
         if (!fits(kFallbackSlots) || lim.maxUniformBufferRange < sizeof(Params))
         {
             Write(Warn, "vulkan: cover: the device takes %u samplers per stage (%u needed); the terrain stays on the stock shaders, without covers",
-                  lim.maxPerStageDescriptorSamplers, kTerrainSamplers + (kFirstTex - 1) + kFallbackSlots);
+                  lim.maxPerStageDescriptorSamplers, kTerrainSamplers + kMapSamplers + kFallbackSlots);
             s.failed = true;
             return false;
         }
         if (indexing && !s.bindless)
             Write(Debug, "vulkan: cover: per-pixel texture indexing is there, but %u samplers per stage aren't (%u): 16 texture slots",
-                  kTerrainSamplers + (kFirstTex - 1) + kBindlessSlots, lim.maxPerStageDescriptorSamplers);
+                  kTerrainSamplers + kMapSamplers + kBindlessSlots, lim.maxPerStageDescriptorSamplers);
 
         // The raised chunks (step 5c): where the device tessellates (the caps probe enabled it).
         s.tessellation = (context::Caps().enabled & gxvk::vk::kCapTessellation) != 0 && lim.maxTessellationGenerationLevel >= 8;
@@ -366,12 +384,14 @@ namespace gxvk::vk::cover
         for (uint32_t i = 0; i < bindingCount; ++i)
         {
             bindings[i].binding         = i;
-            bindings[i].descriptorType  = i == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[i].descriptorType  = i == 0                 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                          : i == kSurfaceBinding ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                                                                 : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[i].descriptorCount = s.bindless && i == kFirstTex ? kBindlessSlots : 1;
             bindings[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
             // The parameters and the maps are read where the triangles are subdivided and where the
             // raised points are made (both take the covers' height).
-            if (s.tessellation && i < kFirstTex)
+            if (s.tessellation && i < kSurfaceBinding)
                 bindings[i].stageFlags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
@@ -380,15 +400,17 @@ namespace gxvk::vk::cover
         setLayout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
-        VkDescriptorPoolSize sizes[2] = {};
+        VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = (kFirstTex - 1 + s.textureSlots) * kSlots;
+        sizes[1].descriptorCount = (kMapSamplers + s.textureSlots) * kSlots;
+        sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        sizes[2].descriptorCount = kSlots;
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool.maxSets       = kSlots;
-        pool.poolSizeCount = 2;
+        pool.poolSizeCount = 3;
         pool.pPoolSizes    = sizes;
         if (!Check(d.CreateDescriptorPool(s.device, &pool, nullptr, &s.pool), "vkCreateDescriptorPool")) return false;
 
@@ -406,6 +428,13 @@ namespace gxvk::vk::cover
                 s.failed = true;
                 return false;
             }
+            if (!memory::CreateBuffer(static_cast<VkDeviceSize>(kSurfaceSize) * kSurfaceSize * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory::Where::Readback,
+                                      slot.surfaceRead) || !slot.surfaceRead.block.mapped)
+            {
+                Write(Error, "vulkan: cover: no buffer to read the surface grid back into");
+                s.failed = true;
+                return false;
+            }
         }
 
         // The maps are filtered where the device can filter 32-bit floats (not guaranteed; common).
@@ -420,7 +449,8 @@ namespace gxvk::vk::cover
 
         // 1 x 1 placeholders until the maps come (no snow, all kept, dry, no water) and for missing textures.
         if (!CreateImage(1, kMapFormat, s.nearMap) || !CreateImage(1, kMapFormat, s.farMap) || !CreateImage(1, VK_FORMAT_R8G8B8A8_UNORM, s.white)
-            || !CreateImage(1, kMapFormat, s.trailMaps[0]) || !CreateImage(1, kMapFormat, s.trailMaps[1]))
+            || !CreateImage(1, kMapFormat, s.trailMaps[0]) || !CreateImage(1, kMapFormat, s.trailMaps[1])
+            || !CreateImage(kSurfaceSize, kMapFormat, s.surface, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
             return false;
 
         s.ready = true;
@@ -481,6 +511,51 @@ namespace gxvk::vk::cover
         Clear(pre, s.nearMap, kEmpty); // remade for a new size and not filled: cleared
         Clear(pre, s.farMap, kEmpty);
 
+        // The surface grid (step 5e): what this slot's frame copied the last time round, handed over (that
+        // frame has completed); the grid cleared once (a tag no cell has); then this frame's copy of what
+        // the frames before wrote, for this slot's next turn. The pixels write it in GENERAL throughout.
+        if (slot.surfacePending)
+        {
+            slot.surfacePending = false;
+            memory::InvalidateHost(slot.surfaceRead.block);
+            if (on && f.surfaceSink) f.surfaceSink(static_cast<const float*>(slot.surfaceRead.block.mapped), kSurfaceSize);
+        }
+        if (s.surface.layout == VK_IMAGE_LAYOUT_UNDEFINED)
+        {
+            Barrier(pre, s.surface, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkClearColorValue none = {};
+            none.float32[0] = -1.0e9f;
+            none.float32[1] = -1.0f;   // no cell's tag
+            none.float32[2] = -1.0e9f;
+            VkImageSubresourceRange range = {};
+            range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            range.levelCount = 1;
+            range.layerCount = 1;
+            s.dapi->CmdClearColorImage(pre, s.surface.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &none, 1, &range);
+            Barrier(pre, s.surface, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_SHADER_WRITE_BIT);
+        }
+        else if (on && f.surface && f.surfaceSink)
+        {
+            Barrier(pre, s.surface, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_ACCESS_TRANSFER_READ_BIT);
+            VkBufferImageCopy copy = {};
+            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy.imageSubresource.layerCount = 1;
+            copy.imageExtent                 = VkExtent3D{ kSurfaceSize, kSurfaceSize, 1 };
+            s.dapi->CmdCopyImageToBuffer(pre, s.surface.image, VK_IMAGE_LAYOUT_GENERAL, slot.surfaceRead.handle, 1, &copy);
+            Barrier(pre, s.surface, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_SHADER_WRITE_BIT);
+            // The copy's write made visible to the host before this slot's fence is waited.
+            VkMemoryBarrier toHost = {};
+            toHost.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            s.dapi->CmdPipelineBarrier(pre, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0, nullptr);
+            slot.surfacePending = true;
+        }
+
         // The parameters, into this slot's buffer (its previous frame has completed).
         Params p = {};
         const uint32_t entries = on && f.entries ? (f.entryCount < kMaxEntries ? f.entryCount : kMaxEntries) : 0;
@@ -525,6 +600,10 @@ namespace gxvk::vk::cover
         p.trail[2]   = f.trailSlur;
         p.trail[3]   = on && f.trails && (s.trailPresent[0] || s.trailPresent[1]) ? 1.0f : 0.0f;
         p.trail2[0]  = f.trailRim;
+        p.surface[0] = f.surfaceCell;
+        p.surface[1] = on && f.surface && f.surfaceCell > 0.0f ? static_cast<float>(kSurfaceSize) : 0.0f;
+        p.surface[2] = static_cast<float>(f.surfaceFirstI);
+        p.surface[3] = static_cast<float>(f.surfaceFirstJ);
         // Per texture: the slot showing it (a loaded one), and its gloss flag.
         for (uint32_t k = 0; k < kMaxTextures; ++k)
             p.texInfo[k / 4][k % 4] = on && f.textureGloss && f.textureGloss[k] ? 2.0f : 0.0f;
@@ -549,6 +628,7 @@ namespace gxvk::vk::cover
             { s.mapSampler, s.trailMaps[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
             { s.mapSampler, s.trailMaps[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         };
+        const VkDescriptorImageInfo surface = { VK_NULL_HANDLE, s.surface.view, VK_IMAGE_LAYOUT_GENERAL };
         static VkDescriptorImageInfo texImages[kBindlessSlots];
         bool texturesChanged = !slot.texturesWritten;
         for (uint32_t sl = 0; sl < s.textureSlots; ++sl)
@@ -578,6 +658,7 @@ namespace gxvk::vk::cover
         add(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[1];
         add(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[2];
         add(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[3];
+        add(kSurfaceBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1).pImageInfo = &surface;
         if (texturesChanged)
         {
             if (s.bindless)
@@ -610,7 +691,12 @@ namespace gxvk::vk::cover
         DestroyImage(s.white);
         DestroyImage(s.trailMaps[0]);
         DestroyImage(s.trailMaps[1]);
-        for (Slot& slot : s.slots) memory::DestroyBuffer(slot.params);
+        DestroyImage(s.surface);
+        for (Slot& slot : s.slots)
+        {
+            memory::DestroyBuffer(slot.params);
+            memory::DestroyBuffer(slot.surfaceRead);
+        }
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);
         if (s.mapSampler != VK_NULL_HANDLE) d.DestroySampler(s.device, s.mapSampler, nullptr);
         if (s.texSampler != VK_NULL_HANDLE) d.DestroySampler(s.device, s.texSampler, nullptr);

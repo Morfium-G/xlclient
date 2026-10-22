@@ -38,6 +38,8 @@ namespace gxvk::vk
         kCapSampledArrayNonUniform = 1u << 16,
         /// SXC: tessellationShader (the terrain raised onto its covers, Vulkan/Cover, step 5c)
         kCapTessellation     = 1u << 17,
+        /// SXC: fragmentStoresAndAtomics (the terrain writes the covers' surface height, Vulkan/Cover, step 5e)
+        kCapFragmentStores   = 1u << 18,
     };
 
     /// What the probe found and the device was created with. Zeroed (a 1.0 device, nothing optional)

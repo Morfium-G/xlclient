@@ -54,6 +54,12 @@ namespace SXC::Cover {
         float trailNow = 0.0f, trailPersist = 600.0f, trailSlur = 0.6f, trailRim = 1.0f;
         TrailLayer trailFine, trailCoarse;
 
+        // The surface grid (step 5e): the window around the player the terrain writes the covers'
+        // surface into (kSurfaceSize cells of surfaceCell yd); read back through TakeSurface().
+        bool surface = false;
+        float surfaceCell = 0.25f;
+        int32_t surfaceFirstI = 0, surfaceFirstJ = 0;
+
         // The textures with a slot this frame: slot s (1..slotCount) shows texture slotTexture[s - 1]
         // (an ID, 1..) through slotGx[s - 1] (loaded); textureGloss[id - 1]: its alpha is a gloss mask.
         uint32_t slotCount = 0;
@@ -69,6 +75,18 @@ namespace SXC::Cover {
 
     // This frame's data (the texture slots assigned now). Main thread.
     const Frame& Current();
+
+    // The surface grid's cells per side (the device's grid: gxvk::vk::cover::kSurfaceSize).
+    constexpr uint32_t kSurfaceSize = 384;
+
+    // The device's read-back of the surface grid (some frames old): per cell the surface's z, the cell's
+    // tag, the bare ground's z, 1 written (gxvk::vk::cover::Frame). Copied. Main thread.
+    void TakeSurface(const float* cells, uint32_t size);
+
+    // The covers' surface at a world point as the terrain last drew it (a few frames old), and the bare
+    // ground's height there. False where the terrain wasn't drawn near the player lately (not in view, no
+    // covers): the stock height then.
+    bool SurfaceAt(float x, float y, float& surfaceZ, float* groundZ = nullptr);
 
     // The seam: CMapRenderChunk::RenderSinglePassVertexPixelShader, before the draw. Sets pixel
     // constants c11 (each layer's painted entry), c12 (each layer's fallen-snow look), c13.x (1: the

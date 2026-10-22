@@ -101,6 +101,7 @@ namespace gxvk::vk::context::detail
             { kCapSpirv15, "SPIR-V 1.5" },
             { kCapSampledArrayNonUniform, "non-uniform sampler indexing" },  // SXC:
             { kCapTessellation, "tessellation" },                            // SXC:
+            { kCapFragmentStores, "pixel shader stores" },                   // SXC:
         };
 
         void SubgroupOps(uint32_t ops, char* out, size_t cap)
@@ -166,6 +167,7 @@ namespace gxvk::vk::context::detail
         if (have.drawIndirectFirstInstance) offered |= kCapIndirectFirstInstance;
         if (have.multiViewport) offered |= kCapMultiViewport;
         if (have.tessellationShader) offered |= kCapTessellation;  // SXC:
+        if (have.fragmentStoresAndAtomics) offered |= kCapFragmentStores;  // SXC:
         if (v11) offered |= kCapSpirv13;
         if (v12) offered |= kCapSpirv15;
 
@@ -246,6 +248,7 @@ namespace gxvk::vk::context::detail
         core(kCapIndirectFirstInstance, features.drawIndirectFirstInstance);
         core(kCapMultiViewport, features.multiViewport);
         core(kCapTessellation, features.tessellationShader);  // SXC:
+        core(kCapFragmentStores, features.fragmentStoresAndAtomics);  // SXC:
 
         // The chain, in front of the caller's. Separate structs, never the VkPhysicalDeviceVulkan11/12Features
         // aggregates: those may not stand beside individual feature structs a caller chains.

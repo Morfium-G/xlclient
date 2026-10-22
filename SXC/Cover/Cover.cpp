@@ -18,6 +18,8 @@
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Services/Texture.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "WoW/Source/Object/ObjectClient/Player_C.h"
+#include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/GroundEffectTextureRec.h"
 #include "WoW/Source/WorldClient/CChunkLiquid.h"
@@ -58,6 +60,10 @@ namespace {
         float mostFallen = 0.0f; // yd: the deepest fallen snow in it
     };
     Map s_near, s_far;
+
+    // The surface grid as last read back (step 5e): RGBA32F per cell, the device's layout.
+    constexpr float kSurfaceCell = 0.25f;   // x kSurfaceSize = 96 yd across
+    std::vector<float> s_surface;
 
     // The cover textures: loaded through the client's texture cache like the terrain's layers, when a
     // drawn chunk first shows them, then kept. A gloss texture tries its "_s" variant first (where later
@@ -405,9 +411,21 @@ namespace {
             }
         }
 
-        std::snprintf(s_status, sizeof(s_status), "%s; chunks drawn %llu (%llu with cover), resolved %llu, %u entries; %s; %s", s_deviceStatus ? s_deviceStatus() : "",
-                      static_cast<unsigned long long>(s_draws), static_cast<unsigned long long>(s_withCover), static_cast<unsigned long long>(s_resolved),
-                      static_cast<unsigned>(s_entries.size()), textures, trails);
+        // The surface grid under the player (step 5e): what the terrain wrote, read back.
+        char surface[120] = "surface under you: not known (terrain not drawn there yet)";
+
+        if (CGPlayer_C* player = ClntObjMgrGetActivePlayerObj()) {
+            const C3Vector p = player->GetPosition();
+            float top = 0.0f, ground = 0.0f;
+
+            if (SXC::Cover::SurfaceAt(p.x, p.y, top, &ground)) {
+                std::snprintf(surface, sizeof(surface), "surface under you: %.2f yd of cover, %+.2f yd from your feet", top - ground, top - p.z);
+            }
+        }
+
+        std::snprintf(s_status, sizeof(s_status), "%s; chunks drawn %llu (%llu with cover), resolved %llu, %u entries; %s; %s\n%s",
+                      s_deviceStatus ? s_deviceStatus() : "", static_cast<unsigned long long>(s_draws), static_cast<unsigned long long>(s_withCover),
+                      static_cast<unsigned long long>(s_resolved), static_cast<unsigned>(s_entries.size()), textures, trails, surface);
         return s_status;
     }
 
@@ -517,6 +535,17 @@ namespace SXC::Cover {
 
         Trails::TookChanges();
 
+        // The surface grid's window: around the player (the terrain writes the cells in it).
+        f.surface = false;
+
+        if (CGPlayer_C* player = ClntObjMgrGetActivePlayerObj()) {
+            const C3Vector p = player->GetPosition();
+            f.surface = true;
+            f.surfaceCell = kSurfaceCell;
+            f.surfaceFirstI = static_cast<int32_t>(std::floor(p.x / kSurfaceCell)) - static_cast<int32_t>(kSurfaceSize / 2);
+            f.surfaceFirstJ = static_cast<int32_t>(std::floor(p.y / kSurfaceCell)) - static_cast<int32_t>(kSurfaceSize / 2);
+        }
+
         f.entries = s_entries.empty() ? nullptr : s_entries.data();
         f.entryCount = static_cast<uint32_t>(s_entries.size());
         f.entryVersion = s_entryVersion;
@@ -562,6 +591,56 @@ namespace SXC::Cover {
         }
 
         return f;
+    }
+
+    void TakeSurface(const float* cells, uint32_t size) {
+        if (!cells || size != kSurfaceSize) {
+            return;
+        }
+
+        s_surface.assign(cells, cells + static_cast<size_t>(size) * size * 4);
+    }
+
+    bool SurfaceAt(float x, float y, float& surfaceZ, float* groundZ) {
+        const int32_t n = static_cast<int32_t>(kSurfaceSize);
+
+        if (s_surface.size() != static_cast<size_t>(n) * n * 4) {
+            return false;
+        }
+
+        // Bilinear between the four cells around the point, over those that hold their own cell (a cell
+        // the terrain didn't draw lately keeps an older one's tag, or none).
+        const float cx = x / kSurfaceCell - 0.5f, cy = y / kSurfaceCell - 0.5f;
+        const int32_t bi = static_cast<int32_t>(std::floor(cx)), bj = static_cast<int32_t>(std::floor(cy));
+        const float fx = cx - static_cast<float>(bi), fy = cy - static_cast<float>(bj);
+        float weight = 0.0f, surface = 0.0f, ground = 0.0f;
+
+        for (int k = 0; k < 4; k++) {
+            const int32_t i = bi + (k & 1), j = bj + (k >> 1);
+            const int32_t si = ((i % n) + n) % n, sj = ((j % n) + n) % n;
+            const float* c = &s_surface[(static_cast<size_t>(sj) * n + si) * 4];
+
+            if (c[3] < 0.5f || c[1] != static_cast<float>((i & 4095) * 4096 + (j & 4095))) {
+                continue;
+            }
+
+            const float w = std::fmax(((k & 1) ? fx : 1.0f - fx) * ((k >> 1) ? fy : 1.0f - fy), 0.001f);
+            weight += w;
+            surface += w * c[0];
+            ground += w * c[2];
+        }
+
+        if (weight <= 0.0f) {
+            return false;
+        }
+
+        surfaceZ = surface / weight;
+
+        if (groundZ) {
+            *groundZ = ground / weight;
+        }
+
+        return true;
     }
 
     void BeforeChunkDraw(CMapRenderChunk* rc) {

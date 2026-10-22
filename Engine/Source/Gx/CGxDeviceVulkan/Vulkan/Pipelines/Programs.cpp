@@ -150,11 +150,13 @@ namespace gxvk::vk::pipelines::detail
     const VkSpecializationInfo* FragmentSpecialization(const Key& k, TerrainSpecialization& storage)
     {
         if (k.fragment != static_cast<uint32_t>(FragmentProgram::Terrain)) return nullptr;
+        // 3: the underlay of a raised chunk (its pixels don't write the covers' surface grid).
         const uint32_t o = k.terrainFragment;
-        const uint32_t values[3] = {
+        const uint32_t values[4] = {
             (o & terrain::kFragmentBigAlpha) ? 1u : 0u, (o & terrain::kFragmentUnlit) ? 1u : 0u, (o & terrain::kFragmentNineTaps) ? 1u : 0u,
+            (k.terrainVertex & terrain::kVertexSunk) ? 1u : 0u,
         };
-        return Specialize(storage, values, 3);
+        return Specialize(storage, values, 4);
     }
 
     void DestroyPrograms()

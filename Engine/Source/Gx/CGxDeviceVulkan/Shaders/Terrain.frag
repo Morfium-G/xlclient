@@ -28,6 +28,7 @@
 layout(constant_id = 0) const bool kBigAlpha = false; // layer 0 takes what the others leave (else lerped in turn)
 layout(constant_id = 1) const bool kUnlit    = false; // layers may opt out of the diffuse light (p1 per layer)
 layout(constant_id = 2) const bool kNineTaps = false; // shadow mode 3: the first cascade with nine taps, the cascades chained
+layout(constant_id = 3) const bool kUnderlay = false; // the lowered underlay of a raised chunk: not the covers' surface
 
 layout(location = 0) in vec4 color0;   // diffuse light
 layout(location = 1) in vec4 color1;   // the sun's highlight
@@ -154,6 +155,12 @@ void main()
     // SXC: the covers over the layers (painted, fallen snow, wetness); unchanged while they're off.
     CoverResult cov = Covers(c, CoverLayerWeights(alpha, kBigAlpha), twice, !kUnlit);
     c = cov.c;
+
+    // SXC: the covers' surface here into the surface grid (step 5e; the underlay lies below it).
+    if (!kUnderlay && cover.enable.x > 0.5)
+    {
+        CoverWriteSurface(coverWorld.xyz, coverTint.w);
+    }
 
     // The shadow: the alpha map's baked one, or the cascades'.
     float shadow = alpha.w;

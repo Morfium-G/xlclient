@@ -30,6 +30,7 @@ layout(std140, set = 2, binding = 0) uniform CoverBlock {
     vec4 trailCoarse;
     vec4 trail;       // now (s), the coarse layer's persist (s), slur (yd of edge softening per yd of depth), on
     vec4 trail2;      // x the rims
+    vec4 surface;     // the surface grid (step 5e): cell (yd), size (0 none), first i, first j
     vec4 texInfo[256]; // texture k + 1 at [k / 4][k % 4]: its slot x 4 (0 = none: drawn plain), + 2 its alpha is a gloss mask
     vec4 entries[127 * 5];
 } cover;
@@ -466,30 +467,61 @@ float CoverHeight(vec2 xy, float groundZ, float up, vec4 w)
 // The cover textures: one array indexed per pixel (COVER_BINDLESS: a Vulkan 1.2 device with non-uniform
 // indexing), else 16 slots the client gives to the textures in view.
 #if COVER_BINDLESS
-layout(set = 2, binding = 5) uniform sampler2D sCoverTex[1024];
+layout(set = 2, binding = 6) uniform sampler2D sCoverTex[1024];
 #else
-layout(set = 2, binding = 5) uniform sampler2D sCoverTex1;
-layout(set = 2, binding = 6) uniform sampler2D sCoverTex2;
-layout(set = 2, binding = 7) uniform sampler2D sCoverTex3;
-layout(set = 2, binding = 8) uniform sampler2D sCoverTex4;
-layout(set = 2, binding = 9) uniform sampler2D sCoverTex5;
-layout(set = 2, binding = 10) uniform sampler2D sCoverTex6;
-layout(set = 2, binding = 11) uniform sampler2D sCoverTex7;
-layout(set = 2, binding = 12) uniform sampler2D sCoverTex8;
-layout(set = 2, binding = 13) uniform sampler2D sCoverTex9;
-layout(set = 2, binding = 14) uniform sampler2D sCoverTex10;
-layout(set = 2, binding = 15) uniform sampler2D sCoverTex11;
-layout(set = 2, binding = 16) uniform sampler2D sCoverTex12;
-layout(set = 2, binding = 17) uniform sampler2D sCoverTex13;
-layout(set = 2, binding = 18) uniform sampler2D sCoverTex14;
-layout(set = 2, binding = 19) uniform sampler2D sCoverTex15;
-layout(set = 2, binding = 20) uniform sampler2D sCoverTex16;
+layout(set = 2, binding = 6) uniform sampler2D sCoverTex1;
+layout(set = 2, binding = 7) uniform sampler2D sCoverTex2;
+layout(set = 2, binding = 8) uniform sampler2D sCoverTex3;
+layout(set = 2, binding = 9) uniform sampler2D sCoverTex4;
+layout(set = 2, binding = 10) uniform sampler2D sCoverTex5;
+layout(set = 2, binding = 11) uniform sampler2D sCoverTex6;
+layout(set = 2, binding = 12) uniform sampler2D sCoverTex7;
+layout(set = 2, binding = 13) uniform sampler2D sCoverTex8;
+layout(set = 2, binding = 14) uniform sampler2D sCoverTex9;
+layout(set = 2, binding = 15) uniform sampler2D sCoverTex10;
+layout(set = 2, binding = 16) uniform sampler2D sCoverTex11;
+layout(set = 2, binding = 17) uniform sampler2D sCoverTex12;
+layout(set = 2, binding = 18) uniform sampler2D sCoverTex13;
+layout(set = 2, binding = 19) uniform sampler2D sCoverTex14;
+layout(set = 2, binding = 20) uniform sampler2D sCoverTex15;
+layout(set = 2, binding = 21) uniform sampler2D sCoverTex16;
 #endif
 
 layout(location = 11) in vec4 coverWorld;   // world position (raised onto the covers), how much the terrain faces up
 layout(location = 12) in vec4 coverView;    // view position
 layout(location = 13) in vec4 coverNormal;  // view normal (not normalised)
 layout(location = 14) in vec4 coverTint;    // the factor the vertex colour put into color0; w the terrain's own height
+
+// The surface grid (step 5e): the covers' surface where the terrain is drawn, for the client to read
+// back (units, the camera, effects at units' feet) and for decals. Per cell: the surface's z, the cell's
+// tag ((i & 4095) * 4096 + (j & 4095): the client takes only a cell's own), the bare ground's z, 1.
+// Only cells in the window around the player (far terrain would wrap onto near cells).
+layout(set = 2, binding = 5, rgba32f) uniform writeonly image2D sCoverSurface;
+
+void CoverWriteSurface(vec3 world, float groundZ)
+{
+    vec4 m = cover.surface;
+    int n = int(m.y + 0.5);
+
+    if (n < 1)
+    {
+        return;
+    }
+
+    ivec2 q = ivec2(floor(world.xy / m.x));
+    ivec2 rel = q - ivec2(m.zw);
+
+    if (rel.x < 0 || rel.y < 0 || rel.x >= n || rel.y >= n)
+    {
+        return;
+    }
+
+    // Positive operands only (CoverTrailSample: a driver took % of a negative int as unsigned).
+    int lift = n * (int(17100.0 / (m.x * float(n))) + 2);
+    ivec2 slot = ivec2(uvec2(q + lift) % uint(n));
+    float tag = float((q.x & 4095) * 4096 + (q.y & 4095));
+    imageStore(sCoverSurface, slot, vec4(world.z, tag, groundZ, 1.0));
+}
 
 float CoverTexInfo(int t) { return cover.texInfo[(t - 1) >> 2][(t - 1) & 3]; }
 

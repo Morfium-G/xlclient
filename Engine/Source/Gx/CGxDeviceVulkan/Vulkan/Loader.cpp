@@ -263,6 +263,7 @@ namespace gxvk::vk::loader
         GXVK_DEVICE_PROC(MapMemory);
         GXVK_DEVICE_PROC(UnmapMemory);
         GXVK_DEVICE_PROC(FlushMappedMemoryRanges);
+        GXVK_DEVICE_PROC(InvalidateMappedMemoryRanges);  // SXC:
 
         GXVK_DEVICE_PROC(CreateBuffer);
         GXVK_DEVICE_PROC(DestroyBuffer);
