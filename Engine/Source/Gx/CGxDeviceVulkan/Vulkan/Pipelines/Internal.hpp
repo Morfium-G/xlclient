@@ -64,7 +64,7 @@ namespace gxvk::vk::pipelines::detail
     /// device that offers less). Every pipeline layout carries the range; the translated modules do
     /// not read it.
     // SXC: + 4 floats of fixed-function fog (was 128 bytes).
-    constexpr uint32_t kPushBytes = 16 * sizeof(float) + 4 * sizeof(float) + 12 * sizeof(float) + 4 * sizeof(float);
+    constexpr uint32_t kPushBytes = 16 * sizeof(float) + 4 * sizeof(float) + 16 * sizeof(float) + 4 * sizeof(float);
 
     /// Samplers kept at once.
     constexpr uint32_t kMaxSamplers = 64;
@@ -112,8 +112,8 @@ namespace gxvk::vk::pipelines::detail
     constexpr uint32_t kAttribTexCoord1 = 7;
 
     /// Whether a program is of the translated family (reads set 1, the semantic interface).
-    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain; }
-    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain; }
+    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain || v == VertexProgram::Decal; }
+    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain || f == FragmentProgram::Decal; }
 
     /// What a pipeline is built from. Compared bytewise, so every byte is set (zeroed first).
     struct Key

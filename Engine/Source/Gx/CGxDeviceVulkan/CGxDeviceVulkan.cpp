@@ -297,12 +297,12 @@ bool CGxDeviceVulkan::SxcCoverFrame(gxvk::vk::cover::Frame& out) {
         trailOut[k]->rectCount = trailIn[k]->rectCount;
         trailOut[k]->full = trailIn[k]->full;
     }
-    static_assert(SXC::Cover::kSurfaceSize == gxvk::vk::cover::kSurfaceSize, "the surface grid's size is the device's");
     out.surface = in.surface;
+    out.surfaceSize = in.surfaceSize;
     out.surfaceCell = in.surfaceCell;
     out.surfaceFirstI = in.surfaceFirstI;
     out.surfaceFirstJ = in.surfaceFirstJ;
-    out.surfaceSink = [](const float* cells, uint32_t size) { SXC::Cover::TakeSurface(cells, size); };
+    out.surfaceSink = [](const float* cells, uint32_t size, float cell) { SXC::Cover::TakeSurface(cells, size, cell); };
     out.entries = in.entries;
     out.entryCount = in.entryCount;
     out.nearSize = in.nearSize;

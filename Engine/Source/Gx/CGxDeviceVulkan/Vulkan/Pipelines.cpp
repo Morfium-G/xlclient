@@ -177,10 +177,12 @@ namespace gxvk::vk::pipelines
         }
         else if (draw.fragment == FragmentProgram::Terrain)
             samplerMask = terrain::SamplerMask(draw.terrainFragment);  // SXC: what the module declares
-        else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated)
+        else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated
+                 || draw.fragment == FragmentProgram::Decal)
             samplerMask = 3u;
         uint32_t layoutIndex = 0;
-        const bool cover = draw.fragment == FragmentProgram::Terrain;  // SXC: our terrain shader reads the covers' set 2
+        // SXC: our terrain shader and the decals on the covers read the covers' set 2.
+        const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal;
         if (!LayoutFor(samplerMask, cover, layoutIndex))
         {
             ++s.stats.skipped;
@@ -351,7 +353,8 @@ namespace gxvk::vk::pipelines
         std::memcpy(push, draw.xform, sizeof draw.xform);
         std::memcpy(push + 16, draw.params, sizeof draw.params);
         std::memcpy(push + 20, draw.tex, sizeof draw.tex);
-        std::memcpy(push + 32, draw.fog, sizeof draw.fog);  // SXC: fixed-function fog
+        std::memcpy(push + 36, draw.fog, sizeof draw.fog);  // SXC: fixed-function fog
+        static_assert(sizeof push == (36 + 4) * sizeof(float), "Shaders/Push.glsl's layout");
         if (!b.pushed || std::memcmp(b.push, push, sizeof push) != 0)
         {
             d.CmdPushConstants(cmd, layout.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, kPushBytes, push);

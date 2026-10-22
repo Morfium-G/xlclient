@@ -232,6 +232,11 @@ namespace
                 AddAttribute(k, in, 2, kAttribColor0, VK_FORMAT_B8G8R8A8_UNORM, kConstantColourOffset);
                 return true;
 
+            // SXC: a projected texture's box (step 5e) reads its position alone.
+            case VertexProgram::Decal:
+                AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                return true;
+
             case VertexProgram::Translated:
             {
                 const manifest::Record* r = manifest::At(k.vertexRecord);
@@ -292,6 +297,13 @@ namespace
             return false;
         }
         if (v == VertexProgram::Terrain) return true;
+        // SXC: and the decal ones (step 5e).
+        if ((v == VertexProgram::Decal) != (f == FragmentProgram::Decal))
+        {
+            why = "the decal shader is paired with another program";
+            return false;
+        }
+        if (v == VertexProgram::Decal) return true;
 
         uint32_t outputs = 0xFFFFFFFFu;
         if (v == VertexProgram::Translated)
@@ -329,8 +341,8 @@ namespace
     const char* ProgramName(uint32_t program, uint16_t record, bool vertex)
     {
         if (const manifest::Record* r = manifest::At(record)) return manifest::FirstName(*r);
-        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated", "Terrain" };
-        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated", "Terrain" };
+        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated", "Terrain", "Decal" };
+        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated", "Terrain", "Decal" };
         if (vertex) return program < kVertexPrograms ? kVertex[program] : "?";
         return program < kFragmentPrograms ? kFragment[program] : "?";
     }

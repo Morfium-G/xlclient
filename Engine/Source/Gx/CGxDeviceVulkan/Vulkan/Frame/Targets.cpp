@@ -69,7 +69,7 @@ namespace gxvk::vk::frame::detail
         sub.pColorAttachments       = &colourRef;
         sub.pDepthStencilAttachment = &depthRef;
 
-        VkSubpassDependency dep[2] = {};
+        VkSubpassDependency dep[3] = {};
         dep[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
         dep[0].dstSubpass    = 0;
         dep[0].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
@@ -85,6 +85,15 @@ namespace gxvk::vk::frame::detail
         dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dep[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
         dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        // SXC: a pixel shader's storage writes to a later draw's pixel shader reads at the same pixel,
+        // inside the pass (frame::PixelWritesToReads: the decals read the terrain's depth, step 5e).
+        dep[2].srcSubpass      = 0;
+        dep[2].dstSubpass      = 0;
+        dep[2].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[2].srcAccessMask   = VK_ACCESS_SHADER_WRITE_BIT;
+        dep[2].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[2].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
+        dep[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
         VkRenderPassCreateInfo info = {};
         info.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -92,7 +101,7 @@ namespace gxvk::vk::frame::detail
         info.pAttachments    = a;
         info.subpassCount    = 1;
         info.pSubpasses      = &sub;
-        info.dependencyCount = 2;
+        info.dependencyCount = 3;
         info.pDependencies   = dep;
         const VkResult r = s.dapi->CreateRenderPass(s.device, &info, nullptr, &out);
         if (r != VK_SUCCESS)

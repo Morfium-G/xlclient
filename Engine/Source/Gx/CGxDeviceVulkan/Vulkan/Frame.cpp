@@ -429,6 +429,17 @@ namespace gxvk::vk::frame
         return s.scene.handle != VK_NULL_HANDLE ? s.scene.extent : s.extent;
     }
 
+    void PixelWritesToReads(VkCommandBuffer cmd)
+    {
+        if (!cmd || !s.dapi) return;
+        VkMemoryBarrier b = {};
+        b.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        s.dapi->CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 1, &b, 0,
+                                   nullptr, 0, nullptr);
+    }
+
     uint32_t Slot() { return s.fi; }
 
     uint64_t Serial() { return s.open ? s.serial : s.serial + 1; }

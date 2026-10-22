@@ -11,6 +11,8 @@
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: surface covers
 
+namespace SXC::Cover { struct Decal; }  // SXC: projected textures on the raised covers
+
 // Not in the original: the Vulkan backend, a CGxDevice beside the D3D9 / D3D9Ex / OpenGL ones,
 // selected with the gxApi CVar ("Vulkan") or "-vulkan" on the command line. The engine above the
 // device is untouched; the Vulkan objects live in the engine-agnostic tier under Vulkan/ (the
@@ -164,6 +166,7 @@ class CGxDeviceVulkan : public CGxDevice {
     void IModelViewProj(float out[16]);
     void IRenderStates(gxvk::vk::pipelines::Draw& draw);
     void ITexTransforms(gxvk::vk::pipelines::Draw& draw);
+    bool IDecalOnCover(gxvk::vk::pipelines::Draw& draw, const SXC::Cover::Decal& decal);  // SXC: step 5e
     // SXC: the volumetric fog's renderer (SXC/Fog/Fog.h), registered at ICreateDrawPath.
     static bool SxcFogRender(const SXC::Fog::Input& in);
     // SXC: the covers' data for our terrain shader (SXC/Cover/Cover.h -> Vulkan/Cover), its textures

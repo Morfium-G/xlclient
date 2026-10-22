@@ -31,7 +31,8 @@ namespace gxvk::vk::manifest { struct Record; }
 //
 //   SXC: our terrain shader (Shaders/Terrain.vert, Terrain.frag), in the translated interface, in place
 //   of the client's terrain records when [Terrain] OurShader is on: Terrain for both stages, the
-//   record's options as specialization constants (Draw::terrainVertex / terrainFragment).
+//   record's options as specialization constants (Draw::terrainVertex / terrainFragment). And Decal for
+//   both (Shaders/Decal.vert, Decal.frag): a projected texture's box, shaded onto the raised covers.
 //
 // A pipeline is built for each distinct combination of vertex layout, programs (and records),
 // topology, blend mode, depth and culling state, colour write mask, fill mode, sampler-slot set and
@@ -62,6 +63,7 @@ namespace gxvk::vk::pipelines
         FixedFunctionSemantic = 2,
         Translated    = 3,
         Terrain       = 4,   // SXC:
+        Decal         = 5,   // SXC: projected textures on the raised covers (step 5e)
         Count
     };
 
@@ -73,6 +75,7 @@ namespace gxvk::vk::pipelines
         FixedFunctionTranslated = 3,
         Translated    = 4,
         Terrain       = 5,   // SXC:
+        Decal         = 6,   // SXC: projected textures on the raised covers (step 5e)
         Count
     };
 
@@ -165,10 +168,11 @@ namespace gxvk::vk::pipelines
 
         /// The push constants (Shaders/Push.glsl): the transform (the row-major matrix, or c0..c3),
         /// the parameters (alpha reference, textured stages, colour ops, alpha ops) and the texture
-        /// transforms of stages 0 and 1 (identity by default).
+        /// transforms of stages 0 and 1 (identity by default): per stage the columns giving u and v
+        /// from (x, y, z, 1), stage s at tex[8s] (u) and tex[8s + 4] (v).
         float xform[16] = {};
         float params[4] = {};
-        float tex[12]   = { 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        float tex[16]   = { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f };
         /// SXC: D3D9's linear vertex fog for the fixed-function programs: GxRs_FogStart,
         /// GxRs_FogEnd, GxRs_FogColor's RGB as one integer (exact in a float), 1 when on.
         float fog[4]    = {};

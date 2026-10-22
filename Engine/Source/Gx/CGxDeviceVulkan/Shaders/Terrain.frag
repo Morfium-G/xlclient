@@ -156,10 +156,12 @@ void main()
     CoverResult cov = Covers(c, CoverLayerWeights(alpha, kBigAlpha), twice, !kUnlit);
     c = cov.c;
 
-    // SXC: the covers' surface here into the surface grid (step 5e; the underlay lies below it).
+    // SXC: the covers' surface here into the surface grid, and this pixel's depth for the projected
+    // textures (step 5e; the underlay lies below the surface).
     if (!kUnderlay && cover.enable.x > 0.5)
     {
         CoverWriteSurface(coverWorld.xyz, coverTint.w);
+        CoverWriteDepth(coverWorld.z - coverTint.w > 0.005);
     }
 
     // The shadow: the alpha map's baked one, or the cascades'.
@@ -229,8 +231,8 @@ void main()
         colour = highlight * shadow + colour;
     }
 
-    // SXC: the covers' debug views, unlit and unfogged.
-    if (cover.enable.x > 0.5 && cover.enable.y > 0.5)
+    // SXC: the covers' debug views, unlit and unfogged (7, the decals', leaves the terrain as it is).
+    if (cover.enable.x > 0.5 && cover.enable.y > 0.5 && cover.enable.y < 6.5)
     {
         oC0 = vec4(CoverDebug(cov, int(cover.enable.y + 0.5)), 1.0);
         return;

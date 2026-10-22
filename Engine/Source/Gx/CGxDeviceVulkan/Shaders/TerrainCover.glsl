@@ -467,24 +467,24 @@ float CoverHeight(vec2 xy, float groundZ, float up, vec4 w)
 // The cover textures: one array indexed per pixel (COVER_BINDLESS: a Vulkan 1.2 device with non-uniform
 // indexing), else 16 slots the client gives to the textures in view.
 #if COVER_BINDLESS
-layout(set = 2, binding = 6) uniform sampler2D sCoverTex[1024];
+layout(set = 2, binding = 7) uniform sampler2D sCoverTex[1024];
 #else
-layout(set = 2, binding = 6) uniform sampler2D sCoverTex1;
-layout(set = 2, binding = 7) uniform sampler2D sCoverTex2;
-layout(set = 2, binding = 8) uniform sampler2D sCoverTex3;
-layout(set = 2, binding = 9) uniform sampler2D sCoverTex4;
-layout(set = 2, binding = 10) uniform sampler2D sCoverTex5;
-layout(set = 2, binding = 11) uniform sampler2D sCoverTex6;
-layout(set = 2, binding = 12) uniform sampler2D sCoverTex7;
-layout(set = 2, binding = 13) uniform sampler2D sCoverTex8;
-layout(set = 2, binding = 14) uniform sampler2D sCoverTex9;
-layout(set = 2, binding = 15) uniform sampler2D sCoverTex10;
-layout(set = 2, binding = 16) uniform sampler2D sCoverTex11;
-layout(set = 2, binding = 17) uniform sampler2D sCoverTex12;
-layout(set = 2, binding = 18) uniform sampler2D sCoverTex13;
-layout(set = 2, binding = 19) uniform sampler2D sCoverTex14;
-layout(set = 2, binding = 20) uniform sampler2D sCoverTex15;
-layout(set = 2, binding = 21) uniform sampler2D sCoverTex16;
+layout(set = 2, binding = 7) uniform sampler2D sCoverTex1;
+layout(set = 2, binding = 8) uniform sampler2D sCoverTex2;
+layout(set = 2, binding = 9) uniform sampler2D sCoverTex3;
+layout(set = 2, binding = 10) uniform sampler2D sCoverTex4;
+layout(set = 2, binding = 11) uniform sampler2D sCoverTex5;
+layout(set = 2, binding = 12) uniform sampler2D sCoverTex6;
+layout(set = 2, binding = 13) uniform sampler2D sCoverTex7;
+layout(set = 2, binding = 14) uniform sampler2D sCoverTex8;
+layout(set = 2, binding = 15) uniform sampler2D sCoverTex9;
+layout(set = 2, binding = 16) uniform sampler2D sCoverTex10;
+layout(set = 2, binding = 17) uniform sampler2D sCoverTex11;
+layout(set = 2, binding = 18) uniform sampler2D sCoverTex12;
+layout(set = 2, binding = 19) uniform sampler2D sCoverTex13;
+layout(set = 2, binding = 20) uniform sampler2D sCoverTex14;
+layout(set = 2, binding = 21) uniform sampler2D sCoverTex15;
+layout(set = 2, binding = 22) uniform sampler2D sCoverTex16;
 #endif
 
 layout(location = 11) in vec4 coverWorld;   // world position (raised onto the covers), how much the terrain faces up
@@ -493,10 +493,42 @@ layout(location = 13) in vec4 coverNormal;  // view normal (not normalised)
 layout(location = 14) in vec4 coverTint;    // the factor the vertex colour put into color0; w the terrain's own height
 
 // The surface grid (step 5e): the covers' surface where the terrain is drawn, for the client to read
-// back (units, the camera, effects at units' feet) and for decals. Per cell: the surface's z, the cell's
-// tag ((i & 4095) * 4096 + (j & 4095): the client takes only a cell's own), the bare ground's z, 1.
-// Only cells in the window around the player (far terrain would wrap onto near cells).
+// back (units, the camera, effects at units' feet). Per cell: the surface's z, the cell's tag ((i &
+// 4095) * 4096 + (j & 4095): the client takes only a cell's own), the bare ground's z, 1. Only cells in
+// the window around the player (far terrain would wrap onto near cells).
 layout(set = 2, binding = 5, rgba32f) uniform writeonly image2D sCoverSurface;
+
+// The terrain's distance per pixel of the target (step 5e: the client's projected textures, Decal.frag,
+// project onto the raised covers through it): the nearest terrain pixel's view depth (its clip w, the
+// same under any projection's near and far and any viewport depth range) with its lowest bit taken for
+// "the cover is raised here", by an atomic minimum (a positive float's bits order like it; overdraw keeps
+// the nearest). Cleared to all ones each frame.
+layout(set = 2, binding = 6, r32ui) uniform coherent uimage2D sCoverDepth;
+
+void CoverWriteDepth(bool raised)
+{
+    ivec2 px = ivec2(gl_FragCoord.xy);
+
+    if (all(lessThan(px, imageSize(sCoverDepth))) && gl_FragCoord.w > 0.0)
+    {
+        imageAtomicMin(sCoverDepth, px, (floatBitsToUint(1.0 / gl_FragCoord.w) & ~1u) | (raised ? 1u : 0u));
+    }
+}
+
+// The slope (dz/dx, dz/dy in world yd) of a value over the surface at this pixel, from the screen
+// derivatives of the world position and of the value; zero where the surface is seen edge-on.
+vec2 CoverSlopeOf(vec3 dpx, vec3 dpy, float dvx, float dvy)
+{
+    float det = dpx.x * dpy.y - dpx.y * dpy.x;
+
+    if (abs(det) < 1e-8)
+    {
+        return vec2(0.0);
+    }
+
+    vec2 g = vec2(dvx * dpy.y - dvy * dpx.y, dpx.x * dvy - dpy.x * dvx) / det;
+    return clamp(g, vec2(-3.0), vec2(3.0));
+}
 
 void CoverWriteSurface(vec3 world, float groundZ)
 {
@@ -508,6 +540,12 @@ void CoverWriteSurface(vec3 world, float groundZ)
         return;
     }
 
+    // The values at the cell's middle, along the slopes here: every pixel in a cell writes nearly the
+    // same (the pixel's own would differ across a 0.25 yd cell on a slope by up to a quarter yard, and
+    // the last one to land changes from frame to frame: decals on the surface shook).
+    vec3 dpx = dFdx(world), dpy = dFdy(world);
+    vec2 surfaceSlope = CoverSlopeOf(dpx, dpy, dpx.z, dpy.z);
+    vec2 groundSlope = CoverSlopeOf(dpx, dpy, dFdx(groundZ), dFdy(groundZ));
     ivec2 q = ivec2(floor(world.xy / m.x));
     ivec2 rel = q - ivec2(m.zw);
 
@@ -516,11 +554,15 @@ void CoverWriteSurface(vec3 world, float groundZ)
         return;
     }
 
+    vec2 toMiddle = (vec2(q) + 0.5) * m.x - world.xy;
+    float surfaceZ = world.z + dot(surfaceSlope, toMiddle);
+    float middleGroundZ = groundZ + dot(groundSlope, toMiddle);
+
     // Positive operands only (CoverTrailSample: a driver took % of a negative int as unsigned).
     int lift = n * (int(17100.0 / (m.x * float(n))) + 2);
     ivec2 slot = ivec2(uvec2(q + lift) % uint(n));
     float tag = float((q.x & 4095) * 4096 + (q.y & 4095));
-    imageStore(sCoverSurface, slot, vec4(world.z, tag, groundZ, 1.0));
+    imageStore(sCoverSurface, slot, vec4(surfaceZ, tag, middleGroundZ, 1.0));
 }
 
 float CoverTexInfo(int t) { return cover.texInfo[(t - 1) >> 2][(t - 1) & 3]; }

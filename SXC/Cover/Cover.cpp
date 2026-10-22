@@ -13,6 +13,8 @@
 #include <vector>
 #include "SXC/Api/sxc_cover.h"
 #include "SXC/Log.h"
+#include "SXC/Settings/Settings.h"
+#include "Engine/Source/Tempest/CAaBox.h"
 #include "Engine/Source/Base/Handle.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/Gx/Gx.h"
@@ -61,9 +63,20 @@ namespace {
     };
     Map s_near, s_far;
 
-    // The surface grid as last read back (step 5e): RGBA32F per cell, the device's layout.
-    constexpr float kSurfaceCell = 0.25f;   // x kSurfaceSize = 96 yd across
-    std::vector<float> s_surface;
+    // The surface grid as last read back (step 5e): RGBA32F per cell, the device's layout, read in its
+    // buffer. 96 yd across, in cells of 0.125 yd (fine: footprints' dips stay apart) or 0.25 yd.
+    constexpr float kSurfaceAcross = 96.0f;
+    const float* s_surface = nullptr;
+    int32_t s_surfaceSize = 0;
+    float s_surfaceCell = 0.25f;
+
+    float SurfaceCellWanted() {
+        static SXC::Settings::Bool s_fine("Terrain", "CoverSurfaceFine", true, "Cover surface grid: fine",
+                                          "The covers' surface as the client reads it back (decals on the cover; later effects at units' feet, "
+                                          "units and the camera) in cells of 0.125 yd rather than 0.25 yd: decals over footprints stay still. "
+                                          "Four times the data copied back from the GPU each frame (about 9 MB rather than 2.4 MB).");
+        return s_fine.Get() ? 0.125f : 0.25f;
+    }
 
     // The cover textures: loaded through the client's texture cache like the terrain's layers, when a
     // drawn chunk first shows them, then kept. A gloss texture tries its "_s" variant first (where later
@@ -540,10 +553,13 @@ namespace SXC::Cover {
 
         if (CGPlayer_C* player = ClntObjMgrGetActivePlayerObj()) {
             const C3Vector p = player->GetPosition();
+            const float cell = SurfaceCellWanted();
+            const int32_t size = static_cast<int32_t>(kSurfaceAcross / cell + 0.5f);
             f.surface = true;
-            f.surfaceCell = kSurfaceCell;
-            f.surfaceFirstI = static_cast<int32_t>(std::floor(p.x / kSurfaceCell)) - static_cast<int32_t>(kSurfaceSize / 2);
-            f.surfaceFirstJ = static_cast<int32_t>(std::floor(p.y / kSurfaceCell)) - static_cast<int32_t>(kSurfaceSize / 2);
+            f.surfaceSize = static_cast<uint32_t>(size);
+            f.surfaceCell = cell;
+            f.surfaceFirstI = static_cast<int32_t>(std::floor(p.x / cell)) - size / 2;
+            f.surfaceFirstJ = static_cast<int32_t>(std::floor(p.y / cell)) - size / 2;
         }
 
         f.entries = s_entries.empty() ? nullptr : s_entries.data();
@@ -593,24 +609,23 @@ namespace SXC::Cover {
         return f;
     }
 
-    void TakeSurface(const float* cells, uint32_t size) {
-        if (!cells || size != kSurfaceSize) {
-            return;
-        }
-
-        s_surface.assign(cells, cells + static_cast<size_t>(size) * size * 4);
+    void TakeSurface(const float* cells, uint32_t size, float cell) {
+        const bool ok = cells && size > 1 && cell > 0.0f;
+        s_surface = ok ? cells : nullptr;
+        s_surfaceSize = ok ? static_cast<int32_t>(size) : 0;
+        s_surfaceCell = ok ? cell : 0.25f;
     }
 
     bool SurfaceAt(float x, float y, float& surfaceZ, float* groundZ) {
-        const int32_t n = static_cast<int32_t>(kSurfaceSize);
+        const int32_t n = s_surfaceSize;
 
-        if (s_surface.size() != static_cast<size_t>(n) * n * 4) {
+        if (!s_surface || n < 2) {
             return false;
         }
 
         // Bilinear between the four cells around the point, over those that hold their own cell (a cell
         // the terrain didn't draw lately keeps an older one's tag, or none).
-        const float cx = x / kSurfaceCell - 0.5f, cy = y / kSurfaceCell - 0.5f;
+        const float cx = x / s_surfaceCell - 0.5f, cy = y / s_surfaceCell - 0.5f;
         const int32_t bi = static_cast<int32_t>(std::floor(cx)), bj = static_cast<int32_t>(std::floor(cy));
         const float fx = cx - static_cast<float>(bi), fy = cy - static_cast<float>(bj);
         float weight = 0.0f, surface = 0.0f, ground = 0.0f;
@@ -641,6 +656,32 @@ namespace SXC::Cover {
         }
 
         return true;
+    }
+
+    // The projected texture being drawn onto the covers (DecalBegin .. DecalEnd), or none.
+    Decal s_decal;
+    bool s_decalOn = false;
+
+    bool DecalsOnCover() {
+        return s_available && s_haveLook && s_look.enabled && s_look.tess_detail > 0.0f;
+    }
+
+    void DecalBegin(int kind, float r, float g, float b, float a) {
+        s_decal.kind = kind;
+        s_decal.colour[0] = r;
+        s_decal.colour[1] = g;
+        s_decal.colour[2] = b;
+        s_decal.colour[3] = a;
+        s_decal.debug = s_look.debug == 7;
+        s_decalOn = true;
+    }
+
+    void DecalEnd() {
+        s_decalOn = false;
+    }
+
+    const Decal* CurrentDecal() {
+        return s_decalOn ? &s_decal : nullptr;
     }
 
     void BeforeChunkDraw(CMapRenderChunk* rc) {

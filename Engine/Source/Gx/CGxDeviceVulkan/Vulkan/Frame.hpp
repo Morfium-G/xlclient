@@ -181,6 +181,11 @@ namespace gxvk::vk::frame
     /// The extent of the current target.
     VkExtent2D Extent();
 
+    /// SXC: inside the open pass, the pixel shaders' storage writes of the draws so far made visible to
+    /// the next draws' pixel shader reads at the same pixel (the passes' self-dependency): the decals
+    /// read the terrain's depth (step 5e).
+    void PixelWritesToReads(VkCommandBuffer cmd);
+
     /// The slot of the open frame (0 .. kFramesInFlight - 1), or of the frame that opens next.
     uint32_t Slot();
 

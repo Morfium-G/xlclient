@@ -57,6 +57,10 @@ OUTPUTS = [
     ] + [
         ("Terrain.tese", f"kTerrainTese{layers}", [f"LAYERS={layers}"])
         for layers in range(1, 5)
+    ] + [
+        # The client's projected textures on the raised covers (step 5e).
+        ("Decal.vert", "kDecalVert"),
+        ("Decal.frag", "kDecalFrag"),
     ]),
 ]
 

@@ -1,7 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
+#include "Engine/Source/Tempest/C3Vector.h"
 
+class CAaBox;
 class CGxTex;
 class CMapRenderChunk;
 
@@ -55,8 +58,10 @@ namespace SXC::Cover {
         TrailLayer trailFine, trailCoarse;
 
         // The surface grid (step 5e): the window around the player the terrain writes the covers'
-        // surface into (kSurfaceSize cells of surfaceCell yd); read back through TakeSurface().
+        // surface into (surfaceSize cells of surfaceCell yd: 96 yd across, [Terrain] CoverSurfaceFine);
+        // read back through TakeSurface().
         bool surface = false;
+        uint32_t surfaceSize = 0;
         float surfaceCell = 0.25f;
         int32_t surfaceFirstI = 0, surfaceFirstJ = 0;
 
@@ -76,17 +81,32 @@ namespace SXC::Cover {
     // This frame's data (the texture slots assigned now). Main thread.
     const Frame& Current();
 
-    // The surface grid's cells per side (the device's grid: gxvk::vk::cover::kSurfaceSize).
-    constexpr uint32_t kSurfaceSize = 384;
-
     // The device's read-back of the surface grid (some frames old): per cell the surface's z, the cell's
-    // tag, the bare ground's z, 1 written (gxvk::vk::cover::Frame). Copied. Main thread.
-    void TakeSurface(const float* cells, uint32_t size);
+    // tag, the bare ground's z, 1 written (gxvk::vk::cover::Frame). Read in place: the device's buffer,
+    // valid until the next call (null: none any more). Main thread.
+    void TakeSurface(const float* cells, uint32_t size, float cell);
 
     // The covers' surface at a world point as the terrain last drew it (a few frames old), and the bare
     // ground's height there. False where the terrain wasn't drawn near the player lately (not in view, no
     // covers): the stock height then.
     bool SurfaceAt(float x, float y, float& surfaceZ, float* groundZ = nullptr);
+
+    // The client's projected textures (selection and spell target circles, blob shadows, models'
+    // projected batches like Consecration) on the raised covers (step 5e): the stock draw lays them on
+    // the terrain's flat triangles, under the cover. Between DecalBegin and DecalEnd the client draws
+    // the decal's box with the decal's own state, and the device shades it onto the terrain it drew this
+    // frame where the cover is raised (Shaders/Decal.frag). `kind`: the decal's coordinates come from
+    // the fixed-function texgen and texture matrices (0), or from a models' projected batch's vertex
+    // constants c6..c9 (1); `colour` its colour (rgba 0..1).
+    struct Decal {
+        int kind = 0;
+        float colour[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        bool debug = false;   // the covers' debug view 7: the box painted by what the decal finds (Shaders/Decal.frag)
+    };
+    bool DecalsOnCover();   // the covers are drawn on a device that can
+    void DecalBegin(int kind, float r, float g, float b, float a);
+    void DecalEnd();
+    const Decal* CurrentDecal();   // the device's question at a draw: null outside DecalBegin / DecalEnd
 
     // The seam: CMapRenderChunk::RenderSinglePassVertexPixelShader, before the draw. Sets pixel
     // constants c11 (each layer's painted entry), c12 (each layer's fallen-snow look), c13.x (1: the

@@ -23,7 +23,7 @@ namespace gxvk::vk::cover
     constexpr uint32_t kFallbackSlots = 16;   ///< slots without it (the textures in view)
     constexpr uint32_t kMaxMap      = 256;
     constexpr uint32_t kMaxTrail    = 1024;   ///< trail layers: texels per side at most
-    constexpr uint32_t kSurfaceSize = 384;    ///< the surface grid's cells per side (step 5e)
+    constexpr uint32_t kMaxSurface  = 1024;   ///< the surface grid's cells per side at most (step 5e)
 
     struct Frame
     {
@@ -70,14 +70,16 @@ namespace gxvk::vk::cover
         TrailLayer trailFine, trailCoarse;
 
         // The surface grid (step 5e): the terrain's pixels write the covers' surface there (RGBA32F per
-        // cell at [mod(j, kSurfaceSize) * kSurfaceSize + mod(i, kSurfaceSize)]: surface z, the cell's tag
-        // (i & 4095) * 4096 + (j & 4095), the bare ground's z, 1 written), only cells in [first, first +
-        // kSurfaceSize); read back each frame and handed to `surfaceSink` some frames later (the
-        // texels as they were; a tag that isn't the cell's own is a stale or never-written cell).
+        // cell at [mod(j, size) * size + mod(i, size)]: surface z, the cell's tag (i & 4095) * 4096 +
+        // (j & 4095), the bare ground's z, 1 written), only cells in [first, first + size); remade when
+        // the size changes. Read back each frame and handed to `surfaceSink` some frames later: the
+        // device's own mapped buffer (the texels as they were; a tag that isn't the cell's own is a
+        // stale or never-written cell), valid until the next call (cells null: none any more).
         bool        surface = false;
+        uint32_t    surfaceSize = 0;
         float       surfaceCell = 0.25f;
         int32_t     surfaceFirstI = 0, surfaceFirstJ = 0;
-        void      (*surfaceSink)(const float* cells, uint32_t size) = nullptr;
+        void      (*surfaceSink)(const float* cells, uint32_t size, float cell) = nullptr;
 
         // The texture slots: slot s (1..slotCount) holds texture slotTexture[s - 1] (0 none) as
         // slots[s - 1] (view null: not loaded, drawn plain); textureGloss[id - 1]: its alpha is a gloss mask.

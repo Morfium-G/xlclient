@@ -92,6 +92,10 @@ namespace gxvk::vk::pipelines::detail
     bool CreateTerrainModules()
     {
         if (!CreateModule(kTerrainVert, sizeof kTerrainVert, s.terrainVert, "Terrain.vert")) return false;
+        // The projected textures on the raised covers (step 5e), in the generic slots.
+        if (!CreateModule(kDecalVert, sizeof kDecalVert, s.vert[static_cast<uint32_t>(VertexProgram::Decal)], "Decal.vert")
+            || !CreateModule(kDecalFrag, sizeof kDecalFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Decal)], "Decal.frag"))
+            return false;
         // The bindless set (SPIR-V 1.5) only where the device is 1.2 with non-uniform indexing.
         const bool bindless = (context::Caps().enabled & gxvk::vk::kCapSampledArrayNonUniform) != 0;
         for (uint32_t b = 0; b < (bindless ? 2u : 1u); ++b)

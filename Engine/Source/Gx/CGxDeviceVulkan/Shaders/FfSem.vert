@@ -31,8 +31,8 @@ void main()
     gl_Position = ToVulkanClip(pc.xform * vec4(inPos.xyz, 1.0));
     color0      = inColor;
     color1      = vec4(0.0);
-    texcoord0   = vec4(TexTransform(0u, inTexCoord0.xy), inTexCoord0.zw);
-    texcoord1   = vec4(TexTransform(1u, inTexCoord1.xy), inTexCoord1.zw);
+    texcoord0   = vec4(TexTransform(0u, inPos.xyz, inTexCoord0.xy), inTexCoord0.zw);
+    texcoord1   = vec4(TexTransform(1u, inPos.xyz, inTexCoord1.xy), inTexCoord1.zw);
     texcoord2   = vec4(0.0);
     texcoord3   = vec4(0.0);
     texcoord4   = vec4(0.0);

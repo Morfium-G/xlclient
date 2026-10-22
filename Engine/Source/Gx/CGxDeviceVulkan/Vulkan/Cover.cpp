@@ -35,12 +35,14 @@ namespace
 
     constexpr uint32_t kSlots      = frame::kFramesInFlight;
     /// Bindings: 0 parameters, 1 near map, 2 far map, 3 and 4 the trails (fine, coarse), 5 the surface
-    /// grid (a storage image the pixels write), then the textures: one array at 6 (bindless), or one
-    /// binding per slot from 6.
+    /// grid and 6 the terrain's depth per pixel (storage images the pixels write; the decals read 6),
+    /// then the textures: one array at 7 (bindless), or one binding per slot from 7.
     constexpr uint32_t kSurfaceBinding = 5;
-    constexpr uint32_t kFirstTex   = 6;
+    constexpr uint32_t kDepthBinding = 6;
+    constexpr uint32_t kFirstTex   = 7;
     constexpr uint32_t kMapSamplers = 4;                         ///< bindings 1..4
-    constexpr uint32_t kSurfaceSize = gxvk::vk::cover::kSurfaceSize;
+    constexpr uint32_t kMaxSurface = gxvk::vk::cover::kMaxSurface;
+    constexpr VkImageUsageFlags kSurfaceUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     constexpr uint32_t kEntryRows  = 5;                          ///< vec4 per entry (sxc_cover_entry, 80 bytes)
     constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots;
     constexpr uint32_t kTerrainSamplers = 9;                     ///< set 0 of the terrain modules: 4 layers, the alpha map, 4 cascades
@@ -82,8 +84,11 @@ namespace
         uint64_t        serial = 0;   ///< the frame the set was written for
         uint32_t        written[kBindlessSlots] = {};  ///< the image IDs its texture bindings hold (0 the white one; never reused, unlike view handles)
         bool            texturesWritten = false;
-        memory::Buffer  surfaceRead;               ///< the surface grid as this slot's frame copied it (Readback memory)
-        bool            surfacePending = false;    ///< a copy was recorded into it: read when the slot comes round again
+        /// The surface grid as this slot's frames copied it (Readback memory), two in turn: the one handed
+        /// to the client is read in place until the next hand-over, so the next copy goes to the other.
+        memory::Buffer  surfaceRead[2];
+        int             surfacePending = -1;       ///< 0 / 1: a copy was recorded into that buffer (handed over when the slot comes round again); 2 + k: buffer k was handed over; -1 none
+        float           surfaceCell = 0.0f;        ///< that copy's cell size
     };
 
     struct State
@@ -108,7 +113,15 @@ namespace
         bool     nearPresent = false, farPresent = false;
         Image    trailMaps[2];                ///< fine, coarse
         bool     trailPresent[2] = {};
-        Image    surface;                     ///< the surface grid (storage, GENERAL once cleared)
+        Image    surface;                     ///< the surface grid (storage, GENERAL once cleared; 1 x 1 until sized)
+        /// The terrain's depth per pixel of the target (R32_UINT storage, GENERAL; 1 x 1 until sized):
+        /// cleared at each frame's first terrain draw, written by the terrain, read by the decals.
+        VkImage        depth = VK_NULL_HANDLE;
+        VkImageView    depthView = VK_NULL_HANDLE;
+        memory::Block  depthBlock;
+        VkExtent2D     depthExtent = { 0, 0 };
+        VkImageLayout  depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        void   (*surfaceSink)(const float*, uint32_t, float) = nullptr; ///< the last one given (told "none" before buffers go)
         VkPipelineStageFlags readers = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; ///< the stages that read the maps
 
         char status[200] = "no terrain drawn yet";
@@ -173,6 +186,61 @@ namespace
         }
         out.size   = size;
         out.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        return true;
+    }
+
+    void DestroyDepth()
+    {
+        if (s.depthView != VK_NULL_HANDLE) s.dapi->DestroyImageView(s.device, s.depthView, nullptr);
+        if (s.depth != VK_NULL_HANDLE) s.dapi->DestroyImage(s.device, s.depth, nullptr);
+        memory::Free(s.depthBlock);
+        s.depth = VK_NULL_HANDLE;
+        s.depthView = VK_NULL_HANDLE;
+        s.depthBlock = memory::Block();
+        s.depthExtent = { 0, 0 };
+        s.depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+
+    /// The terrain's depth image at the target's size (step 5e).
+    bool CreateDepth(VkExtent2D extent)
+    {
+        VkImageCreateInfo info = {};
+        info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        info.imageType     = VK_IMAGE_TYPE_2D;
+        info.format        = VK_FORMAT_R32_UINT;
+        info.extent        = VkExtent3D{ extent.width, extent.height, 1 };
+        info.mipLevels     = 1;
+        info.arrayLayers   = 1;
+        info.samples       = VK_SAMPLE_COUNT_1_BIT;
+        info.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        info.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (!Check(s.dapi->CreateImage(s.device, &info, nullptr, &s.depth), "vkCreateImage (terrain depth)")) return false;
+        VkMemoryRequirements req = {};
+        s.dapi->GetImageMemoryRequirements(s.device, s.depth, &req);
+        if (!memory::Allocate(req, memory::Where::DeviceLocal, s.depthBlock))
+        {
+            s.dapi->DestroyImage(s.device, s.depth, nullptr);
+            s.depth = VK_NULL_HANDLE;
+            return false;
+        }
+        VkImageViewCreateInfo view = {};
+        view.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view.image                       = s.depth;
+        view.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+        view.format                      = VK_FORMAT_R32_UINT;
+        view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view.subresourceRange.levelCount = 1;
+        view.subresourceRange.layerCount = 1;
+        if (!Check(s.dapi->BindImageMemory(s.device, s.depth, s.depthBlock.memory, s.depthBlock.offset), "vkBindImageMemory (terrain depth)")
+            || !Check(s.dapi->CreateImageView(s.device, &view, nullptr, &s.depthView), "vkCreateImageView (terrain depth)"))
+        {
+            DestroyDepth();
+            return false;
+        }
+        s.depthExtent = extent;
+        s.depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         return true;
     }
 
@@ -384,9 +452,9 @@ namespace gxvk::vk::cover
         for (uint32_t i = 0; i < bindingCount; ++i)
         {
             bindings[i].binding         = i;
-            bindings[i].descriptorType  = i == 0                 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                          : i == kSurfaceBinding ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                                                                 : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[i].descriptorType  = i == 0                                          ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                          : i == kSurfaceBinding || i == kDepthBinding ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                                                                                          : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[i].descriptorCount = s.bindless && i == kFirstTex ? kBindlessSlots : 1;
             bindings[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
             // The parameters and the maps are read where the triangles are subdivided and where the
@@ -406,7 +474,7 @@ namespace gxvk::vk::cover
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = (kMapSamplers + s.textureSlots) * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = kSlots;
+        sizes[2].descriptorCount = 2 * kSlots;
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool.maxSets       = kSlots;
@@ -428,13 +496,6 @@ namespace gxvk::vk::cover
                 s.failed = true;
                 return false;
             }
-            if (!memory::CreateBuffer(static_cast<VkDeviceSize>(kSurfaceSize) * kSurfaceSize * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory::Where::Readback,
-                                      slot.surfaceRead) || !slot.surfaceRead.block.mapped)
-            {
-                Write(Error, "vulkan: cover: no buffer to read the surface grid back into");
-                s.failed = true;
-                return false;
-            }
         }
 
         // The maps are filtered where the device can filter 32-bit floats (not guaranteed; common).
@@ -450,7 +511,7 @@ namespace gxvk::vk::cover
         // 1 x 1 placeholders until the maps come (no snow, all kept, dry, no water) and for missing textures.
         if (!CreateImage(1, kMapFormat, s.nearMap) || !CreateImage(1, kMapFormat, s.farMap) || !CreateImage(1, VK_FORMAT_R8G8B8A8_UNORM, s.white)
             || !CreateImage(1, kMapFormat, s.trailMaps[0]) || !CreateImage(1, kMapFormat, s.trailMaps[1])
-            || !CreateImage(kSurfaceSize, kMapFormat, s.surface, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
+            || !CreateImage(1, kMapFormat, s.surface, kSurfaceUsage) || !CreateDepth(VkExtent2D{ 1, 1 }))
             return false;
 
         s.ready = true;
@@ -511,14 +572,31 @@ namespace gxvk::vk::cover
         Clear(pre, s.nearMap, kEmpty); // remade for a new size and not filled: cleared
         Clear(pre, s.farMap, kEmpty);
 
-        // The surface grid (step 5e): what this slot's frame copied the last time round, handed over (that
-        // frame has completed); the grid cleared once (a tag no cell has); then this frame's copy of what
-        // the frames before wrote, for this slot's next turn. The pixels write it in GENERAL throughout.
-        if (slot.surfacePending)
+        // The surface grid (step 5e): remade at the size asked for (the client told first, its buffers
+        // go); what this slot's frame copied the last time round, handed over in place (that frame has
+        // completed); the grid cleared once (a tag no cell has); then this frame's copy of what the frames
+        // before wrote into the slot's other buffer, for its next turn. The pixels write it in GENERAL.
+        const bool surfaceWanted = on && f.surface && f.surfaceSink && f.surfaceSize > 1 && f.surfaceSize <= kMaxSurface;
+        if (f.surfaceSink) s.surfaceSink = f.surfaceSink;
+        if (surfaceWanted && s.surface.size != f.surfaceSize)
         {
-            slot.surfacePending = false;
-            memory::InvalidateHost(slot.surfaceRead.block);
-            if (on && f.surfaceSink) f.surfaceSink(static_cast<const float*>(slot.surfaceRead.block.mapped), kSurfaceSize);
+            s.dapi->DeviceWaitIdle(s.device);
+            if (s.surfaceSink) s.surfaceSink(nullptr, 0, 0.0f);
+            for (Slot& other : s.slots)
+            {
+                memory::DestroyBuffer(other.surfaceRead[0]);
+                memory::DestroyBuffer(other.surfaceRead[1]);
+                other.surfacePending = -1;
+            }
+            DestroyImage(s.surface);
+            if (!CreateImage(f.surfaceSize, kMapFormat, s.surface, kSurfaceUsage) && !CreateImage(1, kMapFormat, s.surface, kSurfaceUsage)) return VK_NULL_HANDLE;
+        }
+        if (slot.surfacePending == 0 || slot.surfacePending == 1)
+        {
+            memory::Buffer& read = slot.surfaceRead[slot.surfacePending];
+            memory::InvalidateHost(read.block);
+            if (on && f.surfaceSink) f.surfaceSink(static_cast<const float*>(read.block.mapped), s.surface.size, slot.surfaceCell);
+            slot.surfacePending = slot.surfacePending + 2;  // handed over: the next copy takes the other one
         }
         if (s.surface.layout == VK_IMAGE_LAYOUT_UNDEFINED)
         {
@@ -536,15 +614,27 @@ namespace gxvk::vk::cover
             Barrier(pre, s.surface, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                     VK_ACCESS_SHADER_WRITE_BIT);
         }
-        else if (on && f.surface && f.surfaceSink)
+        else if (surfaceWanted && s.surface.size == f.surfaceSize)
         {
+            // The buffer not handed over last (2 + k: k was handed over; -1: none yet).
+            const int target = slot.surfacePending >= 2 ? 3 - slot.surfacePending : 0;
+            memory::Buffer& into = slot.surfaceRead[target];
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(f.surfaceSize) * f.surfaceSize * 16;
+            if (into.handle == VK_NULL_HANDLE
+                && (!memory::CreateBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, memory::Where::Readback, into) || !into.block.mapped))
+            {
+                memory::DestroyBuffer(into);
+                Write(Error, "vulkan: cover: no buffer to read the surface grid back into");
+                s.failed = true;
+                return VK_NULL_HANDLE;
+            }
             Barrier(pre, s.surface, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_ACCESS_TRANSFER_READ_BIT);
             VkBufferImageCopy copy = {};
             copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             copy.imageSubresource.layerCount = 1;
-            copy.imageExtent                 = VkExtent3D{ kSurfaceSize, kSurfaceSize, 1 };
-            s.dapi->CmdCopyImageToBuffer(pre, s.surface.image, VK_IMAGE_LAYOUT_GENERAL, slot.surfaceRead.handle, 1, &copy);
+            copy.imageExtent                 = VkExtent3D{ f.surfaceSize, f.surfaceSize, 1 };
+            s.dapi->CmdCopyImageToBuffer(pre, s.surface.image, VK_IMAGE_LAYOUT_GENERAL, into.handle, 1, &copy);
             Barrier(pre, s.surface, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                     VK_ACCESS_SHADER_WRITE_BIT);
             // The copy's write made visible to the host before this slot's fence is waited.
@@ -553,7 +643,42 @@ namespace gxvk::vk::cover
             toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
             s.dapi->CmdPipelineBarrier(pre, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0, nullptr);
-            slot.surfacePending = true;
+            slot.surfacePending = target;
+            slot.surfaceCell = f.surfaceCell;
+        }
+
+        // The terrain's depth per pixel (step 5e): at the target's size, cleared to "none" (all ones) for
+        // this frame's terrain; the frames before have finished with it (same queue, the barrier waits).
+        const VkExtent2D extent = frame::Extent();
+        if (extent.width > 0 && extent.height > 0 && (extent.width != s.depthExtent.width || extent.height != s.depthExtent.height))
+        {
+            s.dapi->DeviceWaitIdle(s.device);
+            DestroyDepth();
+            if (!CreateDepth(extent) && !CreateDepth(VkExtent2D{ 1, 1 })) return VK_NULL_HANDLE;
+        }
+        {
+            VkImageMemoryBarrier b = {};
+            b.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask               = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask               = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.oldLayout                   = s.depthLayout;
+            b.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+            b.image                       = s.depth;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = 1;
+            s.dapi->CmdPipelineBarrier(pre, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            VkClearColorValue none = {};
+            none.uint32[0] = 0xFFFFFFFFu;
+            s.dapi->CmdClearColorImage(pre, s.depth, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &none, 1, &b.subresourceRange);
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            s.dapi->CmdPipelineBarrier(pre, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            s.depthLayout = VK_IMAGE_LAYOUT_GENERAL;
         }
 
         // The parameters, into this slot's buffer (its previous frame has completed).
@@ -601,7 +726,7 @@ namespace gxvk::vk::cover
         p.trail[3]   = on && f.trails && (s.trailPresent[0] || s.trailPresent[1]) ? 1.0f : 0.0f;
         p.trail2[0]  = f.trailRim;
         p.surface[0] = f.surfaceCell;
-        p.surface[1] = on && f.surface && f.surfaceCell > 0.0f ? static_cast<float>(kSurfaceSize) : 0.0f;
+        p.surface[1] = surfaceWanted && s.surface.size == f.surfaceSize && f.surfaceCell > 0.0f ? static_cast<float>(f.surfaceSize) : 0.0f;
         p.surface[2] = static_cast<float>(f.surfaceFirstI);
         p.surface[3] = static_cast<float>(f.surfaceFirstJ);
         // Per texture: the slot showing it (a loaded one), and its gloss flag.
@@ -629,6 +754,7 @@ namespace gxvk::vk::cover
             { s.mapSampler, s.trailMaps[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         };
         const VkDescriptorImageInfo surface = { VK_NULL_HANDLE, s.surface.view, VK_IMAGE_LAYOUT_GENERAL };
+        const VkDescriptorImageInfo depth = { VK_NULL_HANDLE, s.depthView, VK_IMAGE_LAYOUT_GENERAL };
         static VkDescriptorImageInfo texImages[kBindlessSlots];
         bool texturesChanged = !slot.texturesWritten;
         for (uint32_t sl = 0; sl < s.textureSlots; ++sl)
@@ -659,6 +785,7 @@ namespace gxvk::vk::cover
         add(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[2];
         add(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[3];
         add(kSurfaceBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1).pImageInfo = &surface;
+        add(kDepthBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1).pImageInfo = &depth;
         if (texturesChanged)
         {
             if (s.bindless)
@@ -692,10 +819,13 @@ namespace gxvk::vk::cover
         DestroyImage(s.trailMaps[0]);
         DestroyImage(s.trailMaps[1]);
         DestroyImage(s.surface);
+        DestroyDepth();
+        if (s.surfaceSink) s.surfaceSink(nullptr, 0, 0.0f);  // its buffers go
         for (Slot& slot : s.slots)
         {
             memory::DestroyBuffer(slot.params);
-            memory::DestroyBuffer(slot.surfaceRead);
+            memory::DestroyBuffer(slot.surfaceRead[0]);
+            memory::DestroyBuffer(slot.surfaceRead[1]);
         }
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);
         if (s.mapSampler != VK_NULL_HANDLE) d.DestroySampler(s.device, s.mapSampler, nullptr);
