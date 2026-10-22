@@ -5,6 +5,7 @@
 #include "Engine/Source/Tempest/C3Vector.h"
 
 class CAaBox;
+class C44Matrix;
 class CGxTex;
 class CMapRenderChunk;
 
@@ -90,6 +91,18 @@ namespace SXC::Cover {
     // ground's height there. False where the terrain wasn't drawn near the player lately (not in view, no
     // covers): the stock height then.
     bool SurfaceAt(float x, float y, float& surfaceZ, float* groundZ = nullptr);
+
+    // Effects hanging at a unit's feet (attachment 19, Base: paladin auras, spells' effects there) onto
+    // the covers (step 5e, WXL's rule): `pose` (an attached model's context, view space: the parent's bone
+    // matrix at the attachment) lifted by as far as its origin lies below the covers' top around it (the
+    // ground under it plus the thickest cover within 1.5 yd: the unit's own footprint doesn't pull it in,
+    // a slope's uphill ground doesn't push it up); one above it (jumping, flying) stays. `view` / `viewInv`
+    // the scene's. Any thread (it reads the frame's grid).
+    void LiftAtFeet(C44Matrix& pose, const C44Matrix& view, const C44Matrix& viewInv);
+
+    // The camera kept above the covers' surface (step 5e): a position inside the cover layer (below its
+    // surface, not below the bare ground: a cave under a snowy hill stays) is raised to 0.3 yd above it.
+    void KeepCameraAbove(C3Vector& position);
 
     // The client's projected textures (selection and spell target circles, blob shadows, models'
     // projected batches like Consecration) on the raised covers (step 5e): the stock draw lays them on

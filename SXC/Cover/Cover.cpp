@@ -15,6 +15,7 @@
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "Engine/Source/Tempest/CAaBox.h"
+#include "Engine/Source/Tempest/C44Matrix.h"
 #include "Engine/Source/Base/Handle.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/Gx/Gx.h"
@@ -656,6 +657,59 @@ namespace SXC::Cover {
         }
 
         return true;
+    }
+
+    void LiftAtFeet(C44Matrix& pose, const C44Matrix& view, const C44Matrix& viewInv) {
+        if (!s_surface) {
+            return;
+        }
+
+        // The origin in the world (row vectors: world = view-space point x the view's inverse).
+        const float vx = pose.d0, vy = pose.d1, vz = pose.d2;
+        const float x = vx * viewInv.a0 + vy * viewInv.b0 + vz * viewInv.c0 + viewInv.d0;
+        const float y = vx * viewInv.a1 + vy * viewInv.b1 + vz * viewInv.c1 + viewInv.d1;
+        const float z = vx * viewInv.a2 + vy * viewInv.b2 + vz * viewInv.c2 + viewInv.d2;
+        // The cover's thickness around (the thickest within the ring: the unit's own footprint is thin),
+        // on the ground under the origin (a slope's uphill ground doesn't count).
+        constexpr float kRing = 1.5f;
+        const float ring[8][2] = { { kRing, 0.0f }, { -kRing, 0.0f }, { 0.0f, kRing }, { 0.0f, -kRing },
+                                   { 1.06f, 1.06f }, { -1.06f, 1.06f }, { 1.06f, -1.06f }, { -1.06f, -1.06f } };
+        float surface = 0.0f, ground = 0.0f;
+
+        if (!SurfaceAt(x, y, surface, &ground)) {
+            return;
+        }
+
+        float depth = surface - ground;
+
+        for (const auto& o : ring) {
+            float s = 0.0f, g = 0.0f;
+
+            if (SurfaceAt(x + o[0], y + o[1], s, &g)) {
+                depth = std::fmax(depth, s - g);
+            }
+        }
+
+        const float lift = ground + depth - z;
+
+        // Only onto covers (a few yd at most): a unit high above, or bare ground, keeps its pose.
+        if (lift <= 0.0f || lift > 3.0f) {
+            return;
+        }
+
+        // The world's up in view space: the view's z row.
+        pose.d0 += lift * view.c0;
+        pose.d1 += lift * view.c1;
+        pose.d2 += lift * view.c2;
+    }
+
+    void KeepCameraAbove(C3Vector& position) {
+        constexpr float kAbove = 0.3f;
+        float top = 0.0f, ground = 0.0f;
+
+        if (SurfaceAt(position.x, position.y, top, &ground) && position.z >= ground - 0.1f && position.z < top + kAbove && top - ground > 0.005f) {
+            position.z = top + kAbove;
+        }
     }
 
     // The projected texture being drawn onto the covers (DecalBegin .. DecalEnd), or none.

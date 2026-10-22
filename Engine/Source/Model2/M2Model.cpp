@@ -37,6 +37,7 @@
 #include "Engine/Source/Tempest/CMath.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/Object/ObjectClient/Types.h"
+#include "SXC/Cover/Cover.h"  // SXC: effects at units' feet onto the covers
 
 // STATIC: 0x00A45570
 static const uint32_t s_ribbonBlendModes[] = { 0, 1, 2, 10, 3, 4, 5 };
@@ -4858,6 +4859,11 @@ void CM2Model::AnimateAttachmentsMT() {
             M2Attachment* attachment = &this->m_shared->m_data->m_attachments[child->m_attachmentIndex];
             matrix = this->m_boneMatrices[attachment->m_bone];
             matrix.Translate(attachment->m_position);
+
+            // SXC: effects at the unit's feet onto the covers (step 5e).
+            if (child->m_attachmentId == 19) {
+                SXC::Cover::LiftAtFeet(matrix, this->m_scene->m_view, this->m_scene->m_viewInv);
+            }
         }
 
         if (child->m_fFlags & 0x1000) {
@@ -5859,6 +5865,12 @@ void CM2Model::Animate() {
             matrix = parent->m_boneMatrices[attachment->m_bone];
             C3Vector position = attachment->m_position;
             matrix.Translate(position);
+
+            // SXC: effects at the unit's feet onto the covers (step 5e).
+            if (this->m_attachmentId == 19) {
+                SXC::Cover::LiftAtFeet(matrix, scene->m_view, scene->m_viewInv);
+            }
+
             transform = &matrix;
         }
 

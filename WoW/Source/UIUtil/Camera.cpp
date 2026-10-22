@@ -1,5 +1,6 @@
 #include "Camera.h"
 #include "Engine/Source/Base/Coordinate.h"
+#include "SXC/Cover/Cover.h"  // SXC: the camera above the raised covers
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -2506,6 +2507,7 @@ void CGCamera::CalcTargetCamera(CGObject_C* target, uint32_t time) {
     C3Vector noOffset = C3Vector(0.0f, 0.0f, 0.0f);
     this->m_position = this->GetCameraPosition(cameraTarget, distance, noOffset);
     this->m_position = this->BumpCameraPositionFromLiquid(cameraTarget, distance, this->m_position);
+    SXC::Cover::KeepCameraAbove(this->m_position);  // SXC: not inside the raised covers (step 5e)
 
     if (!this->m_relativeTo && !s_cameraWaterCollision->m_intValue && 0.0f == this->m_vehicleYawOffset && (!unit || !unit->GetCanFly())) {
         C3Vector forward = C3Vector(cameraTarget.x - this->m_position.x, cameraTarget.y - this->m_position.y, cameraTarget.z - this->m_position.z);
