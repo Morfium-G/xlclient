@@ -37,9 +37,10 @@ OUTPUTS = [
         ("Fog.comp", "kFogComp"),
         ("Fog.frag", "kFogFrag"),
     ]),
-    # SXC: the lights' cube shadow maps (Vulkan/Shadows.cpp), depth only.
+    # SXC: the lights' cube shadow maps (Vulkan/Shadows.cpp), depth only; alpha-keyed parts discard.
     ("ShadowSpirv.inc", [
         ("LightShadow.vert", "kLightShadowVert"),
+        ("LightShadowAlpha.frag", "kLightShadowAlphaFrag"),
     ]),
     # SXC: our terrain shader (Vulkan/Pipelines/Terrain.cpp): one vertex module; the pixel source once
     # per layer count and shadow group (the samplers a module declares must all be bound), the finer

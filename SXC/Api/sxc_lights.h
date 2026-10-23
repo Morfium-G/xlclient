@@ -48,6 +48,7 @@ typedef struct sxc_lights_settings
     wxl_bool shadows;
     int32_t  shadow_count;    ///< lights with a shadow map at most (the nearest), up to the device's (stats.shadow_slots)
     int32_t  shadow_updates;  ///< shadow maps drawn per frame at most
+    wxl_bool shadow_doodads;  ///< the placed doodads cast too (solid and alpha-keyed batches; blended ones don't)
 } sxc_lights_settings;
 
 /// What a light is (a DoodadLightProperties row). Negative values (and flicker_mode -1) take the
@@ -120,6 +121,7 @@ typedef struct sxc_lights_stats
     uint32_t shadow_draws;    ///< shadow maps drawn this frame
     uint32_t shadow_triangles;///< triangles in them
     uint32_t shadow_waiting;  ///< lights that should have one and wait their turn (or still moving)
+    uint32_t shadow_doodads;  ///< doodads in the maps drawn this frame
 } sxc_lights_stats;
 
 /// A model in the world scene (the light editor's list).

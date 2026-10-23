@@ -287,14 +287,54 @@ bool CGxDeviceVulkan::SxcLightsFrame(gxvk::vk::lights::Frame& out) {
     out.cellLights = in.cellLights;
     std::memcpy(out.viewInv, in.viewInv, sizeof out.viewInv);
 
+    // The jobs, their alpha-keyed parts' textures resolved to this device's images (a texture not on the
+    // GPU yet: the part is left out and the slot looked at again soon).
     static std::vector<gxvk::vk::shadows::Job> jobs;
+    static std::vector<gxvk::vk::shadows::Part> parts;
     jobs.resize(in.shadowJobCount);
+    parts.clear();
+
+    size_t partTotal = 0;   // reserved whole: the jobs point into it
 
     for (uint32_t i = 0; i < in.shadowJobCount; i++) {
-        jobs[i].slot = in.shadowJobs[i].slot;
-        jobs[i].radius = in.shadowJobs[i].radius;
-        jobs[i].vertices = in.shadowJobs[i].vertices;
-        jobs[i].vertexCount = in.shadowJobs[i].vertexCount;
+        partTotal += in.shadowJobs[i].partCount;
+    }
+
+    parts.reserve(partTotal);
+
+    for (uint32_t i = 0; i < in.shadowJobCount; i++) {
+        const SXC::Lights::ShadowJob& job = in.shadowJobs[i];
+        jobs[i].slot = job.slot;
+        jobs[i].radius = job.radius;
+        jobs[i].vertices = job.vertices;
+        jobs[i].vertexCount = job.vertexCount;
+        jobs[i].parts = nullptr;
+        jobs[i].partCount = job.partCount;
+        bool incomplete = false;
+        const size_t first = parts.size();
+
+        for (uint32_t p = 0; p < job.partCount; p++) {
+            gxvk::vk::shadows::Part part;
+            part.firstVertex = job.parts[p].firstVertex;
+            part.vertexCount = job.parts[p].vertexCount;
+
+            if (job.parts[p].texture) {
+                part.texture = device->SxcShadowTexture(job.parts[p].texture);
+
+                if (part.texture == VK_NULL_HANDLE) {
+                    part.vertexCount = 0;
+                    incomplete = true;
+                }
+            }
+
+            parts.push_back(part);
+        }
+
+        jobs[i].parts = job.partCount ? parts.data() + first : nullptr;
+
+        if (incomplete) {
+            SXC::Lights::ShadowIncomplete(job.slot);
+        }
     }
 
     out.shadowJobs = jobs.empty() ? nullptr : jobs.data();

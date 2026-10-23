@@ -632,6 +632,20 @@ int32_t CGxDeviceVulkan::ITexResolve(CGxTex* texId, uint32_t stage, pipelines::D
     return 1;
 }
 
+// SXC: a texture's view for the lights' shadow maps (drawn in the pre-pass, ahead of this frame's
+// fills): only one a draw sampled in an earlier frame, so its texels are surely uploaded; kept alive
+// with this frame. Null otherwise (the caller tries again later).
+VkImageView CGxDeviceVulkan::SxcShadowTexture(CGxTex* texId) {
+    TexRec* r = texId ? RecOf(texId) : nullptr;
+
+    if (!r || r->image.handle == VK_NULL_HANDLE || r->image.cube || r->renderTarget || !r->lastUsed || r->lastUsed >= frame::Serial()) {
+        return VK_NULL_HANDLE;
+    }
+
+    r->lastUsed = frame::Serial();
+    return r->image.view;
+}
+
 // The texture's image, made now if the texture is pending (CGxDeviceD3d::DeviceSetRenderTarget
 // creates the texture it is handed). Null when the texture has none.
 texture::Image* CGxDeviceVulkan::ITexImage(CGxTex* texId) {

@@ -19,6 +19,8 @@ namespace
     namespace loader  = gxvk::vk::loader;
     namespace memory  = gxvk::vk::memory;
     using gxvk::vk::shadows::Job;
+    using gxvk::vk::shadows::Part;
+    using gxvk::vk::shadows::kMaxTexturedParts;
     using gxvk::vk::shadows::kFaceSize;
     using gxvk::vk::shadows::kMaxSlots;
     using gxvk::vk::shadows::kMaxVertices;
@@ -31,7 +33,7 @@ namespace
 
     constexpr VkFormat kFormat = VK_FORMAT_D16_UNORM;   // depth attachment and sampled: every device
     constexpr uint32_t kSlotsInFlight = frame::kFramesInFlight;
-    constexpr VkDeviceSize kVertexBytes = 12;
+    constexpr VkDeviceSize kVertexBytes = 20;   // xyz, uv
 
     struct State
     {
@@ -50,10 +52,15 @@ namespace
 
         VkSampler             sampler = VK_NULL_HANDLE;
         VkShaderModule        vert    = VK_NULL_HANDLE;
+        VkShaderModule        alphaFrag = VK_NULL_HANDLE;
         VkRenderPass          pass    = VK_NULL_HANDLE;
+        VkDescriptorSetLayout textureLayout = VK_NULL_HANDLE;  ///< the alpha-keyed parts' texture
         VkPipelineLayout      layout  = VK_NULL_HANDLE;
-        VkPipeline            pipeline = VK_NULL_HANDLE;
+        VkPipeline            pipeline = VK_NULL_HANDLE;       ///< solid
+        VkPipeline            alphaPipeline = VK_NULL_HANDLE;  ///< alpha-keyed
+        VkSampler             textureSampler = VK_NULL_HANDLE;
         memory::Buffer        vertices[kSlotsInFlight];  ///< per frame slot: the triangles drawn in it
+        VkDescriptorPool      texturePools[kSlotsInFlight] = {}; ///< per frame slot: its parts' sets, reset each frame
     };
     State s;
 
@@ -172,26 +179,47 @@ namespace
         module.pCode    = kLightShadowVert;
         if (!Check(d.CreateShaderModule(s.device, &module, nullptr, &s.vert), "vkCreateShaderModule (LightShadow.vert)")) return false;
 
+        module.codeSize = sizeof kLightShadowAlphaFrag;
+        module.pCode    = kLightShadowAlphaFrag;
+        if (!Check(d.CreateShaderModule(s.device, &module, nullptr, &s.alphaFrag), "vkCreateShaderModule (LightShadowAlpha.frag)")) return false;
+
+        VkDescriptorSetLayoutBinding texture = {};
+        texture.binding         = 0;
+        texture.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        texture.descriptorCount = 1;
+        texture.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo setLayout = {};
+        setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        setLayout.bindingCount = 1;
+        setLayout.pBindings    = &texture;
+        if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.textureLayout), "vkCreateDescriptorSetLayout")) return false;
+
         VkPushConstantRange push = { VK_SHADER_STAGE_VERTEX_BIT, 0, 16 };
         VkPipelineLayoutCreateInfo layout = {};
         layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout.setLayoutCount         = 1;
+        layout.pSetLayouts            = &s.textureLayout;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges    = &push;
         if (!Check(d.CreatePipelineLayout(s.device, &layout, nullptr, &s.layout), "vkCreatePipelineLayout")) return false;
 
-        VkPipelineShaderStageCreateInfo stage = {};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
-        stage.module = s.vert;
-        stage.pName  = "main";
+        VkPipelineShaderStageCreateInfo stages[2] = {};
+        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = s.vert;
+        stages[0].pName  = "main";
+        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = s.alphaFrag;
+        stages[1].pName  = "main";
         VkVertexInputBindingDescription binding = { 0, static_cast<uint32_t>(kVertexBytes), VK_VERTEX_INPUT_RATE_VERTEX };
-        VkVertexInputAttributeDescription attribute = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 };
+        VkVertexInputAttributeDescription attributes[2] = { { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 }, { 1, 0, VK_FORMAT_R32G32_SFLOAT, 12 } };
         VkPipelineVertexInputStateCreateInfo vertexInput = {};
         vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInput.vertexBindingDescriptionCount   = 1;
         vertexInput.pVertexBindingDescriptions      = &binding;
-        vertexInput.vertexAttributeDescriptionCount = 1;
-        vertexInput.pVertexAttributeDescriptions    = &attribute;
+        vertexInput.vertexAttributeDescriptionCount = 2;
+        vertexInput.pVertexAttributeDescriptions    = attributes;
         VkPipelineInputAssemblyStateCreateInfo assembly = {};
         assembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -225,7 +253,7 @@ namespace
         VkGraphicsPipelineCreateInfo pipeline = {};
         pipeline.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         pipeline.stageCount          = 1;
-        pipeline.pStages             = &stage;
+        pipeline.pStages             = stages;
         pipeline.pVertexInputState   = &vertexInput;
         pipeline.pInputAssemblyState = &assembly;
         pipeline.pViewportState      = &viewportState;
@@ -234,7 +262,9 @@ namespace
         pipeline.pDepthStencilState  = &depth;
         pipeline.layout              = s.layout;
         pipeline.renderPass          = s.pass;
-        return Check(d.CreateGraphicsPipelines(s.device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &s.pipeline), "vkCreateGraphicsPipelines (shadows)");
+        if (!Check(d.CreateGraphicsPipelines(s.device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &s.pipeline), "vkCreateGraphicsPipelines (shadows)")) return false;
+        pipeline.stageCount = 2;
+        return Check(d.CreateGraphicsPipelines(s.device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &s.alphaPipeline), "vkCreateGraphicsPipelines (shadows, alpha key)");
     }
 
     /// Once: every layer from UNDEFINED to the layout the lights' set names (never-drawn slots are
@@ -301,6 +331,28 @@ namespace gxvk::vk::shadows
 
         if (!CreatePass() || !CreateImage() || !CreatePipeline()) return false;
 
+        VkSamplerCreateInfo repeat = {};
+        repeat.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        repeat.magFilter    = VK_FILTER_NEAREST;
+        repeat.minFilter    = VK_FILTER_NEAREST;
+        repeat.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        repeat.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        repeat.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        repeat.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        repeat.maxLod       = 0.0f;
+        if (!Check(d.CreateSampler(s.device, &repeat, nullptr, &s.textureSampler), "vkCreateSampler (textures)")) return false;
+
+        for (VkDescriptorPool& pool : s.texturePools)
+        {
+            VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTexturedParts };
+            VkDescriptorPoolCreateInfo info = {};
+            info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            info.maxSets       = kMaxTexturedParts;
+            info.poolSizeCount = 1;
+            info.pPoolSizes    = &size;
+            if (!Check(d.CreateDescriptorPool(s.device, &info, nullptr, &pool), "vkCreateDescriptorPool")) return false;
+        }
+
         for (memory::Buffer& b : s.vertices)
         {
             if (!memory::CreateBuffer(kMaxVertices * kVertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, memory::Where::Stream, b) || !b.block.mapped)
@@ -328,7 +380,10 @@ namespace gxvk::vk::shadows
         const loader::Device& d = *s.dapi;
         memory::Buffer& buffer = s.vertices[frame::Slot()];
         uint8_t* out = static_cast<uint8_t*>(buffer.block.mapped);
-        uint32_t used = 0, drawn = 0;
+        uint32_t used = 0, drawn = 0, textured = 0;
+        const VkDescriptorPool pool = s.texturePools[frame::Slot()];
+        d.ResetDescriptorPool(s.device, pool, 0);   // this slot's last frame has completed
+        std::vector<VkDescriptorSet> sets;
 
         for (; drawn < count; ++drawn)
         {
@@ -340,6 +395,32 @@ namespace gxvk::vk::shadows
             {
                 std::memcpy(out + static_cast<size_t>(used) * kVertexBytes, job.vertices, static_cast<size_t>(job.vertexCount) * kVertexBytes);
                 used += job.vertexCount;
+            }
+
+            // A job without parts is solid; an alpha-keyed part gets a set for its texture (past the
+            // frame's sets, it casts nothing this time).
+            const Part whole = { 0, job.vertexCount, VK_NULL_HANDLE };
+            const Part* parts = job.partCount ? job.parts : &whole;
+            const uint32_t partCount = job.partCount ? job.partCount : 1;
+            sets.assign(partCount, VK_NULL_HANDLE);
+            for (uint32_t p = 0; p < partCount; ++p)
+            {
+                if (parts[p].texture == VK_NULL_HANDLE || textured >= kMaxTexturedParts) continue;
+                VkDescriptorSetAllocateInfo alloc = {};
+                alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                alloc.descriptorPool     = pool;
+                alloc.descriptorSetCount = 1;
+                alloc.pSetLayouts        = &s.textureLayout;
+                if (d.AllocateDescriptorSets(s.device, &alloc, &sets[p]) != VK_SUCCESS) continue;
+                ++textured;
+                VkDescriptorImageInfo image = { s.textureSampler, parts[p].texture, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+                VkWriteDescriptorSet write = {};
+                write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                write.dstSet          = sets[p];
+                write.descriptorCount = 1;
+                write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                write.pImageInfo      = &image;
+                d.UpdateDescriptorSets(s.device, 1, &write, 0, nullptr);
             }
 
             // depth = A + B / distance along the face's axis: 0 at the near plane, 1 at the radius.
@@ -361,10 +442,24 @@ namespace gxvk::vk::shadows
                 {
                     const float push[4] = { static_cast<float>(f / 2), (f & 1) ? -1.0f : 1.0f, face[0], face[1] };
                     const VkDeviceSize offset = 0;
-                    d.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s.pipeline);
                     d.CmdBindVertexBuffers(cmd, 0, 1, &buffer.handle, &offset);
-                    d.CmdPushConstants(cmd, s.layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, push);
-                    d.CmdDraw(cmd, job.vertexCount, 1, firstVertex, 0);
+                    VkPipeline bound = VK_NULL_HANDLE;
+                    for (uint32_t p = 0; p < partCount; ++p)
+                    {
+                        const Part& part = parts[p];
+                        if (!part.vertexCount || part.firstVertex + part.vertexCount > job.vertexCount) continue;
+                        if (part.texture != VK_NULL_HANDLE && sets[p] == VK_NULL_HANDLE) continue;
+                        const VkPipeline want = part.texture != VK_NULL_HANDLE ? s.alphaPipeline : s.pipeline;
+                        if (want != bound)
+                        {
+                            d.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                            d.CmdPushConstants(cmd, s.layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, push);
+                            bound = want;
+                        }
+                        if (part.texture != VK_NULL_HANDLE)
+                            d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s.layout, 0, 1, &sets[p], 0, nullptr);
+                        d.CmdDraw(cmd, part.vertexCount, 1, firstVertex + part.firstVertex, 0);
+                    }
                 }
                 d.CmdEndRenderPass(cmd);
             }
@@ -391,6 +486,12 @@ namespace gxvk::vk::shadows
         if (s.image != VK_NULL_HANDLE) d.DestroyImage(s.device, s.image, nullptr);
         memory::Free(s.block);
         if (s.pipeline != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.pipeline, nullptr);
+        if (s.alphaPipeline != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.alphaPipeline, nullptr);
+        for (VkDescriptorPool pool : s.texturePools)
+            if (pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, pool, nullptr);
+        if (s.textureLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.textureLayout, nullptr);
+        if (s.alphaFrag != VK_NULL_HANDLE) d.DestroyShaderModule(s.device, s.alphaFrag, nullptr);
+        if (s.textureSampler != VK_NULL_HANDLE) d.DestroySampler(s.device, s.textureSampler, nullptr);
         if (s.layout != VK_NULL_HANDLE) d.DestroyPipelineLayout(s.device, s.layout, nullptr);
         if (s.pass != VK_NULL_HANDLE) d.DestroyRenderPass(s.device, s.pass, nullptr);
         if (s.vert != VK_NULL_HANDLE) d.DestroyShaderModule(s.device, s.vert, nullptr);

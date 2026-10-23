@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+class CGxTex;
 class CM2Model;
 class CM2Scene;
 
@@ -39,13 +40,22 @@ namespace SXC::Lights {
         kSurfaceOff = 3,      // another scene than the world's: none
     };
 
+    // A run of a shadow job's vertices: solid (no texture), or alpha-keyed by a model's texture.
+    struct ShadowPart {
+        uint32_t firstVertex;
+        uint32_t vertexCount;
+        CGxTex* texture;
+    };
+
     // A light's cube shadow map to draw this frame (the device's Vulkan/Shadows): triangles, three
-    // vertices each, xyz relative to the light, out to its radius.
+    // vertices each (xyz relative to the light, then u, v), out to its radius, in parts.
     struct ShadowJob {
         uint32_t slot;
         float radius;
         const float* vertices;
         uint32_t vertexCount;
+        const ShadowPart* parts;
+        uint32_t partCount;
     };
 
     // What the device reads per frame (pointers valid until the next Current()).
@@ -73,6 +83,10 @@ namespace SXC::Lights {
 
     // How many of this frame's shadow jobs the device drew (the first ones); the others' slots are redrawn later.
     void ShadowsDrawn(uint32_t drawn);
+
+    // A slot drawn without some of its alpha-keyed parts (their textures weren't on the GPU yet): looked at
+    // again soon, and redrawn.
+    void ShadowIncomplete(uint32_t slot);
 
     // This frame's lights, gathered now. Main thread, once per frame (the device's first terrain draw).
     const Frame& Current();

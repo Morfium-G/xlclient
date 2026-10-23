@@ -24,10 +24,13 @@
 #include "Engine/Source/Model2/M2Scene.h"
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Os/TimeManager.h"
+#include "Engine/Source/Services/Texture.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
 #include "WoW/Source/WorldClient/CMapBaseObjLink.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapChunk.h"
+#include "WoW/Source/WorldClient/MapDoodadDef.h"
+#include "WoW/Source/WorldClient/MapLoad.h"
 #include "WoW/Source/WorldClient/MapObj.h"
 #include "WoW/Source/WorldClient/MapObjDef.h"
 #include "WoW/Source/WorldClient/MapObjGroup.h"
@@ -656,6 +659,7 @@ namespace {
 
     std::vector<float> s_shadowVertices;
     std::vector<ShadowJob> s_shadowJobs;
+    std::vector<ShadowPart> s_shadowParts;
     std::vector<uint32_t> s_shadowJobSlots;
 
     // An axis-aligned box against a sphere.
@@ -683,35 +687,132 @@ namespace {
     }
 
     struct Gathered {
-        std::vector<float>* out = nullptr;   // null: the signature only
+        std::vector<float>* out = nullptr;   // null: the signature only; else 5 floats a vertex (xyz, uv)
+        std::vector<ShadowPart>* parts = nullptr; // the job's runs (from partBase on), with out
+        size_t partBase = 0;
         C3Vector centre;
         float radius = 0.0f;
         uint32_t limit = 0;                  // vertices at most (out's size may grow by that much)
         uint32_t added = 0;
         bool truncated = false;
+        std::unordered_set<const void*>* doodads = nullptr;  // the doodads taken so far (linked from several chunks)
+        uint32_t doodadCount = 0;
 
-        void Add(const C3Vector& a, const C3Vector& b, const C3Vector& c) {
+        // A triangle; with a texture, alpha-keyed by it at the texture coordinates `uv`.
+        void Add(const C3Vector& a, const C3Vector& b, const C3Vector& c, CGxTex* texture = nullptr, const C2Vector* uv = nullptr) {
             if (added + 3 > limit) {
                 truncated = true;
                 return;
             }
 
-            const C3Vector v[3] = { a - centre, b - centre, c - centre };
-
-            for (const C3Vector& p : v) {
-                out->push_back(p.x);
-                out->push_back(p.y);
-                out->push_back(p.z);
+            if (parts->size() == partBase || parts->back().texture != texture) {
+                parts->push_back(ShadowPart{ added, 0, texture });
             }
 
+            const C3Vector v[3] = { a - centre, b - centre, c - centre };
+
+            for (int k = 0; k < 3; k++) {
+                out->push_back(v[k].x);
+                out->push_back(v[k].y);
+                out->push_back(v[k].z);
+                out->push_back(uv ? uv[k].x : 0.0f);
+                out->push_back(uv ? uv[k].y : 0.0f);
+            }
+
+            parts->back().vertexCount += 3;
             added += 3;
         }
     };
+
+    bool Holds(const CAaBox& b, const C3Vector& p, float margin) {
+        return p.x >= b.b.x - margin && p.x <= b.t.x + margin && p.y >= b.b.y - margin && p.y <= b.t.y + margin && p.z >= b.b.z - margin && p.z <= b.t.z + margin;
+    }
+
+    // A placed doodad's solid and alpha-keyed batches (blended ones: glows, flames, glass cast nothing), at
+    // rest through its placement. Its alpha-keyed textures' readiness goes into the signature (a map drawn
+    // before they loaded is drawn again).
+    uint32_t AddModel(Gathered& g, CM2Model* model, const C44Matrix& placement, uint32_t h) {
+        const M2Data* data = model->m_shared->m_data;
+        const M2SkinProfile* skin = model->m_shared->m_skinData;
+        static std::vector<C3Vector> world;
+        static std::vector<uint8_t> sectionDone;
+        world.clear();
+        sectionDone.assign(skin->m_skinSections.m_count, 0);
+
+        if (g.out) {
+            world.resize(skin->m_vertices.m_count);
+
+            for (uint32_t v = 0; v < skin->m_vertices.m_count; v++) {
+                const uint16_t global = skin->m_vertices[v];
+                world[v] = global < data->m_vertices.m_count ? data->m_vertices[global].m_position * placement : C3Vector(0.0f, 0.0f, 0.0f);
+            }
+        }
+
+        for (uint32_t b = 0; b < skin->m_batches.m_count; b++) {
+            const M2Batch& batch = skin->m_batches[b];
+
+            if (batch.m_materialIndex >= data->m_materials.m_count || batch.m_skinSectionIndex >= skin->m_skinSections.m_count) {
+                continue;
+            }
+
+            const uint16_t blend = data->m_materials[batch.m_materialIndex].m_blendMode;
+
+            if (blend >= 2 || sectionDone[batch.m_skinSectionIndex]) {
+                continue;
+            }
+
+            CGxTex* texture = nullptr;
+
+            if (blend == 1) {
+                const uint32_t combo = batch.m_textureComboIndex < data->m_textureCombos.m_count ? data->m_textureCombos[batch.m_textureComboIndex] : 0xFFFF;
+                CTexture* t = combo < data->m_textures.m_count && model->m_textures ? model->m_textures[combo] : nullptr;
+                texture = t ? TextureGetGxTex(t, 0, nullptr) : nullptr;
+                h = Mix(h, texture ? 5 : 6);
+
+                if (!texture) {
+                    continue;   // not loaded yet: nothing rather than a solid blob
+                }
+            }
+
+            sectionDone[batch.m_skinSectionIndex] = 1;
+
+            if (!g.out) {
+                continue;
+            }
+
+            const M2SkinSection& section = skin->m_skinSections[batch.m_skinSectionIndex];
+            const uint32_t end = std::min<uint32_t>(section.m_indexStart + section.m_indexCount, skin->m_indices.m_count);
+
+            for (uint32_t k = section.m_indexStart; k + 2 < end; k += 3) {
+                const uint16_t i0 = skin->m_indices[k], i1 = skin->m_indices[k + 1], i2 = skin->m_indices[k + 2];
+
+                if (i0 >= world.size() || i1 >= world.size() || i2 >= world.size() || !TriangleReaches(world[i0], world[i1], world[i2], g.centre, g.radius)) {
+                    continue;
+                }
+
+                if (texture) {
+                    const C2Vector uv[3] = { data->m_vertices[skin->m_vertices[i0]].m_texcoord[0], data->m_vertices[skin->m_vertices[i1]].m_texcoord[0],
+                                             data->m_vertices[skin->m_vertices[i2]].m_texcoord[0] };
+                    g.Add(world[i0], world[i1], world[i2], texture, uv);
+                } else {
+                    g.Add(world[i0], world[i1], world[i2]);
+                }
+            }
+        }
+
+        return h;
+    }
+
+    void GatherDoodad(Gathered& g, const CMapBaseObjLink* link, uint32_t& h);
 
     // What a light's map is drawn from (into g.out when set); the surroundings' signature either way.
     uint32_t Gather(Gathered& g) {
         uint32_t h = 2166136261u;
         static std::vector<C3Vector> world;
+        static std::unordered_set<const void*> doodads;
+        doodads.clear();
+        g.doodads = &doodads;
+        const bool withDoodads = s_settings.shadow_doodads != WXL_FALSE;
 
         for (CMapObjDef* def = CMap::mapObjDefHash.m_fulllist.Head(); def; def = CMap::mapObjDefHash.m_fulllist.Next(def)) {
             if ((static_cast<uint32_t>(def->m_flags) & 0x20) || !BoxReaches(def->m_bbox, g.centre, g.radius)) {
@@ -727,10 +828,14 @@ namespace {
             }
 
             for (CMapBaseObjLink* link = def->m_mapObjDefGroupLinkList.Head(); link; link = def->m_mapObjDefGroupLinkList.Next(link)) {
-                const CMapObjDefGroup* defGroup = static_cast<const CMapObjDefGroup*>(link->m_owner);
+                CMapObjDefGroup* defGroup = static_cast<CMapObjDefGroup*>(link->m_owner);
 
                 if (!defGroup || !BoxReaches(defGroup->m_bbox, g.centre, g.radius)) {
                     continue;
+                }
+
+                for (CMapBaseObjLink* d = withDoodads ? defGroup->m_doodadDefLinkList.Head() : nullptr; d; d = defGroup->m_doodadDefLinkList.Next(d)) {
+                    GatherDoodad(g, d, h);
                 }
 
                 CMapObjGroup* group = obj->GetGroup(defGroup->m_groupNum, 0);
@@ -787,6 +892,10 @@ namespace {
 
             h = Mix(h, reinterpret_cast<uintptr_t>(chunk));
 
+            for (CMapBaseObjLink* d = withDoodads ? chunk->m_doodadDefLinkList.Head() : nullptr; d; d = chunk->m_doodadDefLinkList.Next(d)) {
+                GatherDoodad(g, d, h);
+            }
+
             if (!g.out) {
                 continue;
             }
@@ -821,12 +930,39 @@ namespace {
         return h;
     }
 
+    // A placed doodad (linked from the terrain chunks it stands on and the WMO groups it is in: units, game
+    // objects and held items never are), once per gathering, except the light's own: a lantern's or a
+    // torch's box holds its light. (CMap::doodadDefList is only the queue of doodads still loading.)
+    void GatherDoodad(Gathered& g, const CMapBaseObjLink* link, uint32_t& h) {
+        CMapDoodadDef* def = static_cast<CMapDoodadDef*>(link->m_owner);
+
+        if (!def || !g.doodads->insert(def).second) {
+            return;
+        }
+
+        CM2Model* model = def->m_model;
+
+        if (!model || !BoxReaches(def->m_bbox, g.centre, g.radius) || Holds(def->m_bbox, g.centre, 0.1f)) {
+            return;
+        }
+
+        const bool ready = model->m_shared && model->m_shared->m_data && model->m_shared->m_skinData && model->IsLoaded(0, 0);
+        h = Mix(h, reinterpret_cast<uintptr_t>(def));
+        h = Mix(h, ready ? 3 : 4);
+
+        if (ready) {
+            g.doodadCount++;
+            h = AddModel(g, model, def->m_mat, h);
+        }
+    }
+
     // Which drawn lights get a shadow map this frame, and which maps are drawn. Lights in s_lights,
     // s_lightFound filled; sets GpuLight::shadow, fills s_shadowJobs.
     void AssignShadows(uint32_t nowMs) {
         s_shadowJobs.clear();
         s_shadowJobSlots.clear();
         s_shadowVertices.clear();
+        s_shadowParts.clear();
         s_stats.shadow_slots = s_shadowSlotCount;
         s_shadowFrame++;
 
@@ -909,6 +1045,7 @@ namespace {
         const uint32_t updates = static_cast<uint32_t>(std::max(s_settings.shadow_updates, 0));
         uint32_t checks = 0;
         std::vector<std::pair<size_t, uint32_t>> ranges; // per job: first float, vertex count
+        std::vector<size_t> partRanges;                  // per job: its first part
 
         for (const Candidate& c : candidates) {
             GpuLight& light = s_lights[c.light];
@@ -971,12 +1108,14 @@ namespace {
             ShadowSlot& s = s_shadowSlots[slot];
             s.usedFrame = s_shadowFrame;
 
-            if (draw && s_shadowJobs.size() < updates && s_shadowVertices.size() / 3 < s_shadowMaxVertices) {
+            if (draw && s_shadowJobs.size() < updates && s_shadowVertices.size() / 5 < s_shadowMaxVertices) {
                 Gathered g;
                 g.out = &s_shadowVertices;
                 g.centre = f.pos;
                 g.radius = radius;
-                g.limit = std::min(kShadowMaxPerLight, s_shadowMaxVertices - static_cast<uint32_t>(s_shadowVertices.size() / 3));
+                g.limit = std::min(kShadowMaxPerLight, s_shadowMaxVertices - static_cast<uint32_t>(s_shadowVertices.size() / 5));
+                g.parts = &s_shadowParts;
+                g.partBase = s_shadowParts.size();
                 const size_t first = s_shadowVertices.size();
                 s.signature = Gather(g);
 
@@ -989,11 +1128,13 @@ namespace {
                 s.radius = radius;
                 s.valid = true;
                 s.checkMs = nowMs + 2000 + static_cast<uint32_t>(f.key % 1000);
-                s_shadowJobs.push_back(ShadowJob{ slot, radius, nullptr, g.added });
+                s_shadowJobs.push_back(ShadowJob{ slot, radius, nullptr, g.added, nullptr, static_cast<uint32_t>(s_shadowParts.size() - g.partBase) });
                 s_shadowJobSlots.push_back(slot);
                 ranges.emplace_back(first, g.added);
+                partRanges.push_back(g.partBase);
                 s_stats.shadow_draws++;
                 s_stats.shadow_triangles += g.added / 3;
+                s_stats.shadow_doodads += g.doodadCount;
                 usable = true;
             } else if (draw && !usable) {
                 s_stats.shadow_waiting++;
@@ -1008,6 +1149,7 @@ namespace {
         // The vertices are all in place: point the jobs at them.
         for (size_t j = 0; j < s_shadowJobs.size(); j++) {
             s_shadowJobs[j].vertices = ranges[j].second ? s_shadowVertices.data() + ranges[j].first : nullptr;
+            s_shadowJobs[j].parts = s_shadowJobs[j].partCount ? s_shadowParts.data() + partRanges[j] : nullptr;
         }
     }
 
@@ -1048,11 +1190,11 @@ namespace {
                       "%u table lights (%u at the model's origin: attachment missing)\n"
                       "%u in range, %u merged, %u drawn%s (%u indoors); grid %u x %u cells of %.0f yd, busiest cell %u lights, %u cells over their limit; "
                       "stock terrain lights %s\n"
-                      "shadows: %u lights with a map (of %u slots), %u waiting; %u maps drawn this frame (%u triangles)",
+                      "shadows: %u lights with a map (of %u slots), %u waiting; %u maps drawn this frame (%u triangles, %u doodads)",
                       s_stats.models, s_stats.model_lights, s_stats.placed, s_stats.suppressed, s_stats.table_lights, s_stats.attach_missing,
                       s_stats.in_range, s_stats.merged, s_stats.active, s_stats.dropped ? " (the farthest left out: more than 512)" : "", s_stats.indoor, s_stats.cells,
                       s_stats.cells, s_frame.cellSize, s_stats.busiest_cell, s_stats.full_cells, StockTerrainOff() ? "off" : "on", s_stats.shadowed,
-                      s_stats.shadow_slots, s_stats.shadow_waiting, s_stats.shadow_draws, s_stats.shadow_triangles);
+                      s_stats.shadow_slots, s_stats.shadow_waiting, s_stats.shadow_draws, s_stats.shadow_triangles, s_stats.shadow_doodads);
         return s_status;
     }
 
@@ -1475,6 +1617,13 @@ namespace SXC::Lights {
         s_shadowSlotCount = slots;
         s_shadowMaxVertices = maxVertices;
         s_shadowSlots.clear();   // a new device: nothing drawn
+    }
+
+    void ShadowIncomplete(uint32_t slot) {
+        if (slot < s_shadowSlots.size()) {
+            s_shadowSlots[slot].signature = 0;   // differs from any gathered one: redrawn at its next look
+            s_shadowSlots[slot].checkMs = OsGetAsyncTimeMs() + 500;
+        }
     }
 
     void ShadowsDrawn(uint32_t drawn) {
