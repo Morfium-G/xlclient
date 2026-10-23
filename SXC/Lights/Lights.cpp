@@ -605,6 +605,20 @@ namespace SXC::Lights {
         return Settled() && s_settings.stock_off;
     }
 
+    static int s_otherScenes = 0; // scenes other than the world's drawing now (nested: a portrait's)
+
+    void SceneDrawBegin(const CM2Scene* scene) {
+        s_otherScenes += scene != World::s_m2Scene ? 1 : 0;
+    }
+
+    void SceneDrawEnd(const CM2Scene* scene) {
+        s_otherScenes -= scene != World::s_m2Scene && s_otherScenes > 0 ? 1 : 0;
+    }
+
+    bool WorldDrawing() {
+        return s_otherScenes == 0;
+    }
+
     const Frame& Current() {
         const uint32_t size = s_stats.struct_size;
         s_stats = sxc_lights_stats{};
@@ -686,6 +700,11 @@ namespace SXC::Lights {
 
         s_stats.active = static_cast<uint32_t>(s_lights.size());
         BuildGrid(camera, range, cell, perCell);
+
+        // The view back to the world (row vectors: world = view x the view's inverse), a row per world axis.
+        const C44Matrix& vi = scene->m_viewInv;
+        const float rows[12] = { vi.a0, vi.b0, vi.c0, vi.d0, vi.a1, vi.b1, vi.c1, vi.d1, vi.a2, vi.b2, vi.c2, vi.d2 };
+        std::memcpy(s_frame.viewInv, rows, sizeof rows);
 
         s_frame.on = true;
         s_frame.debug = set.debug;

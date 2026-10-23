@@ -4,7 +4,8 @@
 // radius ((1 - (d/r)^2)^2 to the light's falloff power), wrapped Lambert ((N.L + 0.5) / 1.5), a spot
 // cone; added to the stock light with a soft knee on the brightest channel (the hue kept).
 //
-// Set 3 of our terrain pipelines.
+// Set 3 of our terrain pipelines and of the translated model and WMO pixel modules (step 6b: the
+// translator inlines this file; Tools/VulkanShaders).
 
 struct Light
 {
@@ -17,8 +18,21 @@ struct Light
 layout(std430, set = 3, binding = 0) readonly buffer LightBlock {
     vec4  lightGrid;      // corner x, y, 1 / cell size, cells per side
     vec4  lightInfo;      // lights per cell, lights, on, debug view
+    vec4  lightViewInv[3]; // the world scene's view back to the world: world = (dot(row, (view, 1))) per row
     Light lights[];
 };
+
+// A view-space point of the world scene in the world (the models and WMOs light in view space).
+vec3 LightsViewToWorld(vec3 v)
+{
+    vec4 p = vec4(v, 1.0);
+    return vec3(dot(lightViewInv[0], p), dot(lightViewInv[1], p), dot(lightViewInv[2], p));
+}
+
+vec3 LightsViewDirToWorld(vec3 v)
+{
+    return vec3(dot(lightViewInv[0].xyz, v), dot(lightViewInv[1].xyz, v), dot(lightViewInv[2].xyz, v));
+}
 
 layout(std430, set = 3, binding = 1) readonly buffer LightCells {
     uint cellLights[];    // per cell (y * cells + x): light indices, 0xFFFFFFFF ends a list
@@ -103,4 +117,39 @@ vec3 LightsCombine(vec3 stock, vec3 lamps)
     float room = max(1.0 - knee, 0.001);
     float shaped = top - over + room * (1.0 - exp(-over / room));
     return total * (shaped / max(top, 0.001));
+}
+
+// A translated model or WMO pixel's lit colour (step 6b): `stock` is the vertex module's lit colour
+// (color0: the sun, the ambient, the client's own point lights, x the material), `viewPos` /
+// `viewNormal` what the translator captured in the vertex module (w 1 when found: the projection's
+// input, the normal the sun lights); without a normal (WMO groups drawn with baked vertex colours) the
+// surface's own from the position's slopes. Our lights join the light the texture is multiplied by.
+vec4 LightsModelColor(vec4 stock, vec4 viewPos, vec4 viewNormal)
+{
+    // The slopes first: derivatives must be taken in uniform control flow.
+    vec3 faceted = cross(dFdx(viewPos.xyz), dFdy(viewPos.xyz));
+
+    if (!LightsOn() || viewPos.w < 0.5)
+    {
+        return stock;
+    }
+
+    vec3 nv = viewNormal.w > 0.5 ? viewNormal.xyz : faceted;
+    nv = dot(nv, nv) > 1e-12 ? normalize(nv) : vec3(0.0, 0.0, 1.0);
+
+    // A slope normal has no set side: the one facing the camera.
+    if (viewNormal.w < 0.5 && dot(nv, -viewPos.xyz) < 0.0)
+    {
+        nv = -nv;
+    }
+
+    int count;
+    vec3 lamps = LightsAt(LightsViewToWorld(viewPos.xyz), normalize(LightsViewDirToWorld(nv)), count);
+
+    if (LightsDebug() == 1)
+    {
+        return vec4(vec3(0.15) + lamps, stock.a);
+    }
+
+    return vec4(LightsCombine(clamp(stock.rgb, 0.0, 1.0), lamps), stock.a);
 }

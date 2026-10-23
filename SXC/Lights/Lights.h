@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+class CM2Scene;
+
 // SXC's point lights (port plan step 6): the sxc.lights service (SXC/Api/sxc_lights.h) holds what a mod
 // sets; once per frame the lights are gathered from the M2 scene (the models' own point lights), merged,
 // flickered, faded toward the range and listed per cell of a world grid around the camera; the Vulkan
@@ -37,6 +39,7 @@ namespace SXC::Lights {
         uint32_t lightCount = 0;
         const GpuLight* lights = nullptr;
         const uint32_t* cellLights = nullptr; // cell (x, y) at [(y * cells + x) * perCell ..]: light indices, kNoLight ends a list
+        float viewInv[12] = {};               // the world scene's view back to the world: rows x, y, z (w the translation)
     };
 
     // The device's side: whether it draws our lights, its one-line status.
@@ -48,4 +51,10 @@ namespace SXC::Lights {
 
     // Whether the stock point lights of the terrain chunks are to be left out (ours replace them).
     bool StockTerrainOff();
+
+    // The seam in CM2Scene::Draw: while a scene other than the world's draws (portraits, the character
+    // screen: another view), the device draws its models without our lights. Main thread.
+    void SceneDrawBegin(const CM2Scene* scene);
+    void SceneDrawEnd(const CM2Scene* scene);
+    bool WorldDrawing();
 }

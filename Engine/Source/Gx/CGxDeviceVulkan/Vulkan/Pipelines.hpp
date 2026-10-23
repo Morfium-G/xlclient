@@ -165,6 +165,7 @@ namespace gxvk::vk::pipelines
         uint32_t terrainVertex   = 0;   ///< SXC: with VertexProgram::Terrain, terrain::kVertex* options
         uint32_t terrainFragment = 0;   ///< SXC: with FragmentProgram::Terrain, terrain::kFragment* options
         bool     terrainUnderlay = false; ///< SXC: a raised terrain chunk: draw it flat and lowered first (kVertexSunk)
+        bool     lightsOff = false;       ///< SXC: a lit translated module of another scene than the world's: our lights off
 
         /// The push constants (Shaders/Push.glsl): the transform (the row-major matrix, or c0..c3),
         /// the parameters (alpha reference, textured stages, colour ops, alpha ops) and the texture

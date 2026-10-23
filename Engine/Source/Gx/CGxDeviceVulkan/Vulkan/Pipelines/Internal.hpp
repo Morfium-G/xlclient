@@ -186,7 +186,7 @@ namespace gxvk::vk::pipelines::detail
     struct LayoutEntry
     {
         uint32_t              mask   = 0;
-        bool                  cover  = false;   ///< SXC: set 2 is Vulkan/Cover's, set 3 Vulkan/Lights'
+        uint32_t              extra  = 0;       ///< SXC: kExtraCover (set 2 Vulkan/Cover's, set 3 Vulkan/Lights'), kExtraLights (set 2 empty, set 3 the lights')
 
         VkDescriptorSetLayout set0   = VK_NULL_HANDLE;
         VkPipelineLayout      layout = VK_NULL_HANDLE;
@@ -237,6 +237,7 @@ namespace gxvk::vk::pipelines::detail
         VkShaderModule        terrainTesc[4]   = {};                ///<      Terrain.tesc by layers - 1,
         VkShaderModule        terrainTese[4]   = {};                ///<      Terrain.tese by layers - 1 (made where the device tessellates)
         VkDescriptorSetLayout regsLayout = VK_NULL_HANDLE;    ///< set 1: one dynamic uniform buffer, both stages
+        VkDescriptorSetLayout emptyLayout = VK_NULL_HANDLE;   ///< SXC: set 2 of the lit translated pipelines (they read set 3 only)
         VkDescriptorPool      regsPool   = VK_NULL_HANDLE;    ///< the set-1 sets, for the session
         VkPipelineCache       cache      = VK_NULL_HANDLE;
         memory::Buffer        constant;                       ///< the constant stream (kConstantBytes)
@@ -295,7 +296,8 @@ namespace gxvk::vk::pipelines::detail
 
     // Layouts.cpp
     bool CreateRegsLayout();
-    bool LayoutFor(uint32_t samplerMask, bool cover, uint32_t& index);
+    constexpr uint32_t kExtraNone = 0, kExtraCover = 1, kExtraLights = 2;  // SXC: LayoutEntry::extra
+    bool LayoutFor(uint32_t samplerMask, uint32_t extra, uint32_t& index);
     void DestroyLayouts();
 
     // Build.cpp

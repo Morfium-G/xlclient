@@ -425,6 +425,7 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
     draw.vertexRecord = nullptr;
     draw.fragmentRecord = nullptr;
     draw.vertexRows = pipelines::kVertexRowsSmall;
+    draw.lightsOff = !SXC::Lights::WorldDrawing();  // SXC: a portrait's models get none of the world's lights
 
     if (!vsTranslated && !psTranslated) {
         if (vs) {

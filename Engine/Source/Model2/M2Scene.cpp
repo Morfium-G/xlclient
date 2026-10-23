@@ -22,6 +22,7 @@
 #include "Engine/Source/Tempest/C3Ray.h"
 #include "Engine/Source/Tempest/NTempest.h"
 #include "SXC/Log.h"  // SXC:
+#include "SXC/Lights/Lights.h"  // SXC: the world's lights only on the world's scene
 
 // SXC: the mesh IntersectHitTestTriangles is testing, for its out-of-range check and report: set by
 // HitTestGeometry (a skin section) and HitTestCollision (the collision mesh, section -1).
@@ -2262,10 +2263,14 @@ void CM2Scene::Draw(M2PASS pass) {
         CM2Scene::s_optFlags = optFlags;
     }
 
+    SXC::Lights::SceneDrawBegin(this);  // SXC: another scene than the world's draws without our lights
+
     CM2SceneRender render(this);
     render.Draw(pass, this->m_elements.m_data, this->m_passElements[pass].m_data, this->m_passElements[pass].m_count);
 
     if (pass == M2PASS_0) {
         render.Draw(M2PASS_0, this->m_elements.m_data, this->m_doodadElements.m_data, this->m_doodadElements.m_count);
     }
+
+    SXC::Lights::SceneDrawEnd(this);
 }

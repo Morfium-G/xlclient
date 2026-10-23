@@ -227,6 +227,7 @@ namespace
             if (std::strcmp(t[1], "fixed_fog") == 0)         r.fixedFog = true;
             else if (std::strcmp(t[1], "point_size") == 0)   r.pointSize = true;
             else if (std::strcmp(t[1], "point_sprite") == 0) r.pointSprite = true;
+            else if (std::strcmp(t[1], "lights") == 0)       r.lights = true;  // SXC: step 6b
             else return false;
             return true;
         }

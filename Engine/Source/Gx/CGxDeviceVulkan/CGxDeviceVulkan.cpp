@@ -282,6 +282,7 @@ bool CGxDeviceVulkan::SxcLightsFrame(gxvk::vk::lights::Frame& out) {
     out.lightCount = in.lightCount;
     out.lights = in.lights;
     out.cellLights = in.cellLights;
+    std::memcpy(out.viewInv, in.viewInv, sizeof out.viewInv);
     return true;
 }
 

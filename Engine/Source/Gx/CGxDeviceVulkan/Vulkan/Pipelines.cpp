@@ -184,9 +184,11 @@ namespace gxvk::vk::pipelines
                  || draw.fragment == FragmentProgram::Decal)
             samplerMask = 3u;
         uint32_t layoutIndex = 0;
-        // SXC: our terrain shader and the decals on the covers read the covers' set 2.
+        // SXC: our terrain shader and the decals on the covers read the covers' set 2 (and the lights'
+        // set 3); the translated pixel modules flagged `lights` (models, WMOs) the lights' set 3.
         const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal;
-        if (!LayoutFor(samplerMask, cover, layoutIndex))
+        const bool lit = draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights;
+        if (!LayoutFor(samplerMask, cover ? kExtraCover : (lit ? kExtraLights : kExtraNone), layoutIndex))
         {
             ++s.stats.skipped;
             return false;
@@ -252,9 +254,12 @@ namespace gxvk::vk::pipelines
 
         // SXC: set 2, the covers' (written and uploaded at the frame's first terrain draw).
         const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial) : VK_NULL_HANDLE;
-        // SXC: set 3, the lights' (filled at the frame's first terrain draw).
-        const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial) : VK_NULL_HANDLE;
-        if (cover && (set2 == VK_NULL_HANDLE || set3 == VK_NULL_HANDLE))
+        // SXC: set 3, the lights' (filled at the frame's first use); the lights off for a model of another
+        // scene than the world's (portraits).
+        const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial)
+                                     : lit ? (draw.lightsOff ? gxvk::vk::lights::OffSet(slot) : gxvk::vk::lights::FrameSet(slot, serial))
+                                           : VK_NULL_HANDLE;
+        if ((cover && set2 == VK_NULL_HANDLE) || ((cover || lit) && set3 == VK_NULL_HANDLE))
         {
             ++s.stats.skipped;
             return false;
@@ -303,7 +308,7 @@ namespace gxvk::vk::pipelines
             d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 2, 1, &set2, 0, nullptr);
             b.set2 = set2;
         }
-        if (cover && b.set3 != set3)  // SXC:
+        if ((cover || lit) && b.set3 != set3)  // SXC:
         {
             d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 3, 1, &set3, 0, nullptr);
             b.set3 = set3;

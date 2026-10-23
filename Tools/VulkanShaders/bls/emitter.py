@@ -27,6 +27,7 @@ companion pixel module -- the fixed-function stage D3D runs after them -- is gen
 """
 import collections
 import math
+import os
 
 from . import dx9ir as ir
 
@@ -50,6 +51,30 @@ for _i in range(8):
 FOG_ROW = 15
 
 SWZ = ir.SWZ
+
+# SXC: our point lights on models and WMOs, per pixel (port plan step 6b). Every vertex module writes
+# two more varyings, the view position and normal as the record had them (w 1 where found, 0 else),
+# at locations past the semantics'. In the model and WMO vertex families they're captured where the
+# record has them: the projection's input (dp4 oPos, c2..c5, rP) and the normal the sun lights
+# (dp3 ..., -c12, rN), the same constants in every model (Diffuse_*, Color_*, CDiffuse_*) and WMO
+# (MapObj*) record. The pixel modules of those families add the lights (Lights.glsl, inlined, set 3)
+# to their lit colour input (color0) and carry `flag lights`; the device binds the lights' set then.
+SXC_VIEW_LOCATION, SXC_NORMAL_LOCATION = 11, 12
+SXC_LIT_VERTEX = ('Diffuse_', 'Color_', 'CDiffuse_', 'MapObj')
+SXC_LIT_PIXEL = ('Combiners_', 'MapObj')
+SXC_PROJECTION = (2, 3, 4, 5)
+SXC_SUN = 12
+SXC_LIGHTS_GLSL = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
+                                                'Engine', 'Source', 'Gx', 'CGxDeviceVulkan', 'Shaders', 'Lights.glsl'))
+
+
+def sxc_lights_source():
+    """Lights.glsl's text, or None when the translator runs outside the client's tree."""
+    try:
+        with open(SXC_LIGHTS_GLSL, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 class Refused(Exception):
@@ -106,6 +131,13 @@ class Emitter(object):
         self.depth = 1
         self.loopn = 0
         self.ops_used = collections.Counter()
+        # SXC: step 6b (the lights on models and WMOs)
+        name = getattr(rec, 'name', '') or ''
+        self.sxc_lit_vertex = self.vs and name.startswith(SXC_LIT_VERTEX)
+        self.sxc_lit_pixel = not self.vs and name.startswith(SXC_LIT_PIXEL)
+        self.sxc_view_done = False
+        self.sxc_normal_done = False
+        self.sxc_lights = None
 
     # -- operands ---------------------------------------------------------------------------------
 
@@ -362,11 +394,35 @@ class Emitter(object):
         d = i.dst
         self.assign(d, vec='%s * %s + %s' % tuple(self.srcm(s, d) for s in i.srcs[:3]))
 
+    # SXC: step 6b. A temp register a two-source op pairs with one of `consts` (negated or not), else None.
+    def sxc_paired_temp(self, i, consts, negated):
+        a, b = i.srcs[0], i.srcs[1]
+        for c, t in ((a, b), (b, a)):
+            if (c.rtype == ir.RT_CONST and not c.rel and c.index in consts and c.index not in self.defs and (c.mod == 1) == negated
+                    and t.rtype == ir.RT_TEMP and not t.rel and t.mod == 0):
+                self.temps.add(t.index)
+                return 'r%d' % t.index
+        return None
+
     def r_dp3(self, i):
+        # SXC: the normal the sun lights (dp3 ..., -c12, rN), captured before the op can overwrite it.
+        if self.sxc_lit_vertex and not self.sxc_normal_done:
+            n = self.sxc_paired_temp(i, (SXC_SUN,), True)
+            if n:
+                self.line('sxcNormal = vec4(%s.xyz, 1.0);   // SXC: the normal the sun lights (our lights, step 6b)' % n)
+                self.sxc_normal_done = True
         a, b = self.src_sw(i.srcs[0], [0, 1, 2]), self.src_sw(i.srcs[1], [0, 1, 2])
         self.assign(i.dst, scalar='dot(%s, %s)' % (a, b))
 
     def r_dp4(self, i):
+        # SXC: the view position the projection takes (dp4 oPos, c2..c5, rP).
+        if self.sxc_lit_vertex and not self.sxc_view_done and i.dst.rtype in (ir.RT_RASTOUT, ir.RT_OUTPUT):
+            nm = self.regname(i.dst)
+            if nm == 'oPos' or 'position0' in self.out_sems.get(nm, []):
+                p = self.sxc_paired_temp(i, SXC_PROJECTION, False)
+                if p:
+                    self.line('sxcView = vec4(%s.xyz, 1.0);   // SXC: the view position (our lights, step 6b)' % p)
+                    self.sxc_view_done = True
         self.assign(i.dst, scalar='dot(%s, %s)' % (self.src(i.srcs[0]), self.src(i.srcs[1])))
 
     def r_dp2add(self, i):
@@ -581,6 +637,11 @@ class Emitter(object):
                 if s not in self.reads:
                     self.reads.append(s)
             self.vconst = VCONST_SMALL
+            # SXC: step 6b. A model or WMO pixel module with a lit colour input adds our lights to it.
+            if self.sxc_lit_pixel and 'color0' in self.reads:
+                self.sxc_lights = sxc_lights_source()
+                if self.sxc_lights:
+                    self.flags.add('lights')
         return self.text()
 
     def text(self):
@@ -606,11 +667,18 @@ class Emitter(object):
                     continue
                 t = VARYING_TYPE.get(sem, 'vec4')
                 P('layout(location = %d) out %s %s;' % (VARYING_LOCATION[sem], t, sem))
+            P('// SXC: the view position and normal for our lights (step 6b; w 1 where the record has them).')
+            P('layout(location = %d) out vec4 sxcView;' % SXC_VIEW_LOCATION)
+            P('layout(location = %d) out vec4 sxcNormal;' % SXC_NORMAL_LOCATION)
         else:
             P('// Varyings read, by semantic, at the same locations the vertex module writes them.')
             for sem in self.reads:
                 t = VARYING_TYPE.get(sem, 'vec4')
                 P('layout(location = %d) in %s %s;' % (VARYING_LOCATION[sem], t, sem))
+            if self.sxc_lights:
+                P('// SXC: the view position and normal the vertex module captured, for our lights (step 6b).')
+                P('layout(location = %d) in vec4 sxcView;' % SXC_VIEW_LOCATION)
+                P('layout(location = %d) in vec4 sxcNormal;' % SXC_NORMAL_LOCATION)
             P('')
             P('layout(location = 0) out vec4 oC0;')
             if self.samplers:
@@ -629,6 +697,10 @@ class Emitter(object):
         P('    vec4 misc;       // misc.x = alphaRef / 255 (fixed-function alpha test, 0 = off)')
         P('    vec4 v[%d];     // vertex c0..c%d' % (self.vconst, self.vconst - 1))
         P('} regs;')
+        if self.sxc_lights:
+            P('')
+            P('// SXC: our point lights (Shaders/Lights.glsl, as the client tree had it at translation).')
+            L.extend(self.sxc_lights.rstrip('\n').split('\n'))
         if self.defs or self.defi:
             P('')
             P('// Constants the bytecode def\'s: literals, never uploaded by the engine.')
@@ -671,6 +743,8 @@ class Emitter(object):
         if self.vs:
             for nm in self.outregs:
                 P('    vec4 %s = vec4(0.0);' % nm)
+            P('    sxcView = vec4(0.0);')
+            P('    sxcNormal = vec4(0.0);')
         else:
             P('    oC0 = vec4(0.0);')
             for nm, sem in self.inputs.items():
@@ -680,6 +754,8 @@ class Emitter(object):
                     rhs = 'clamp(%s, 0.0, 1.0)' % sem       # ps_2_0 colour inputs are clamped by SM2
                 else:
                     rhs = sem
+                if sem == 'color0' and self.sxc_lights:
+                    rhs = 'LightsModelColor(%s, sxcView, sxcNormal)' % rhs   # SXC: our lights join the lit colour
                 P('    vec4 %s = %s;' % (nm, rhs))
         P('')
         L.extend(self.body)

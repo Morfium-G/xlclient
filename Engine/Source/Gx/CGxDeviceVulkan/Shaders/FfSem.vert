@@ -25,6 +25,10 @@ layout(location = 7) out vec4 texcoord5;
 layout(location = 8) out vec4 texcoord6;
 layout(location = 9) out vec4 texcoord7;
 layout(location = 10) out float fog0;
+// SXC: the view position and normal the translated vertex modules capture for our lights (step 6b);
+// none here (w 0: a lit pixel module leaves the light as it is).
+layout(location = 11) out vec4 sxcView;
+layout(location = 12) out vec4 sxcNormal;
 
 void main()
 {
@@ -40,4 +44,6 @@ void main()
     texcoord6   = vec4(0.0);
     texcoord7   = vec4(0.0);
     fog0        = 1.0;
+    sxcView     = vec4(0.0);
+    sxcNormal   = vec4(0.0);
 }
