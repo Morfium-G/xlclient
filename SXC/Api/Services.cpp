@@ -10,11 +10,13 @@
 #include "SXC/Api/sxc_cover.h"
 #include "SXC/Api/sxc_lights.h"
 
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 #include "SXC/Data/Data.h"
+#include "SXC/Data/Editor.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 #include "SXC/Ui/Ui.h"
@@ -233,9 +235,94 @@ namespace {
         return WXL_E_NOT_FOUND;
     }
 
+    int32_t WXL_CALL AddRow(sxc_table table) {
+        const Data::Row row = table ? TableOf(table)->Add() : Data::Row();
+        return row ? static_cast<int32_t>(row.Index()) : -1;
+    }
+
+    int32_t WXL_CALL CloneRow(sxc_table table, uint32_t index) {
+        if (!table || index >= TableOf(table)->RowCount()) {
+            return -1;
+        }
+
+        const Data::Row row = TableOf(table)->Clone(index);
+        return row ? static_cast<int32_t>(row.Index()) : -1;
+    }
+
+    wxl_result WXL_CALL RemoveRow(sxc_table table, uint32_t index) {
+        if (!table || index >= TableOf(table)->RowCount()) {
+            return WXL_E_NOT_FOUND;
+        }
+
+        TableOf(table)->Remove(index);
+        return WXL_OK;
+    }
+
+    wxl_bool WXL_CALL RevertRow(sxc_table table, uint32_t index) {
+        return table && index < TableOf(table)->RowCount() && TableOf(table)->Revert(index);
+    }
+
+    wxl_bool WXL_CALL CanUndo(sxc_table table) {
+        return table && TableOf(table)->CanUndo();
+    }
+
+    wxl_bool WXL_CALL CanRedo(sxc_table table) {
+        return table && TableOf(table)->CanRedo();
+    }
+
+    void WXL_CALL Undo(sxc_table table) {
+        if (table) TableOf(table)->Undo();
+    }
+
+    void WXL_CALL Redo(sxc_table table) {
+        if (table) TableOf(table)->Redo();
+    }
+
+    wxl_bool WXL_CALL HasChanges(sxc_table table) {
+        return table && TableOf(table)->HasChanges();
+    }
+
+    wxl_bool WXL_CALL ChangedOnDisk(sxc_table table) {
+        return table && TableOf(table)->ChangedOnDisk();
+    }
+
+    wxl_bool WXL_CALL Save(sxc_table table, char* error, uint32_t errorSize) {
+        std::string why;
+        const bool ok = table && TableOf(table)->Save(&why);
+
+        if (error && errorSize) {
+            std::snprintf(error, errorSize, "%s", ok ? "" : (table ? why.c_str() : "no table"));
+        }
+
+        return ok;
+    }
+
+    void WXL_CALL Reload(sxc_table table) {
+        if (table) TableOf(table)->Reload();
+    }
+
+    void WXL_CALL DrawRowForm(sxc_table table, uint32_t index) {
+        if (!table || index >= TableOf(table)->RowCount()) {
+            return;
+        }
+
+        Data::Table& t = *TableOf(table);
+        const Data::Editor::Link link = Data::Editor::DrawRowForm(t, t.At(index));
+
+        if (!link.table.empty()) {
+            Data::Editor::OpenRowWindow(link.table, link.id);
+        }
+    }
+
+    void WXL_CALL OpenRow(sxc_table table, uint32_t id) {
+        if (table) Data::Editor::OpenRowWindow(TableOf(table)->Name(), id);
+    }
+
     const sxc_data_api s_data = {
         sizeof(sxc_data_api), SchemaBegin, SchemaField, SchemaRegister, FindTable, Loaded, Generation, Status, RowCount, FindRow,
         FieldIndex, GetRaw, GetString, SetRaw, SetString, Subscribe, Unsubscribe,
+        AddRow, CloneRow, RemoveRow, RevertRow, CanUndo, CanRedo, Undo, Redo, HasChanges, ChangedOnDisk, Save, Reload,
+        DrawRowForm, OpenRow,
     };
 
     // --- sxc.settings --------------------------------------------------------------------------------

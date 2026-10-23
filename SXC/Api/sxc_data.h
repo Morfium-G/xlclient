@@ -126,6 +126,37 @@ typedef struct sxc_data_api
     /// Called after every reload and edit, on the main thread.
     wxl_result(WXL_CALL* subscribe)(sxc_table table, sxc_table_listener listener, void* user);
     wxl_result(WXL_CALL* unsubscribe)(sxc_table table, sxc_table_listener listener, void* user);
+
+    // --- appended 2026-10-23: editing as the Data view does (check struct_size) ---------------------
+
+    /// A new row (the next free id, every field's default) / a copy of row `index` with a new id: its
+    /// index, or -1. Row positions change on add, remove and save; ids don't.
+    int32_t(WXL_CALL* add_row)(sxc_table table);
+    int32_t(WXL_CALL* clone_row)(sxc_table table, uint32_t index);
+    wxl_result(WXL_CALL* remove_row)(sxc_table table, uint32_t index);
+    /// The row as in the file (loaded or last saved); a row added since is removed (false then).
+    wxl_bool(WXL_CALL* revert_row)(sxc_table table, uint32_t index);
+
+    /// The table's undo history (shared with the Data view).
+    wxl_bool(WXL_CALL* can_undo)(sxc_table table);
+    wxl_bool(WXL_CALL* can_redo)(sxc_table table);
+    void(WXL_CALL* undo)(sxc_table table);
+    void(WXL_CALL* redo)(sxc_table table);
+
+    /// Unsaved edits; the file changed on disk while there were.
+    wxl_bool(WXL_CALL* has_changes)(sxc_table table);
+    wxl_bool(WXL_CALL* changed_on_disk)(sxc_table table);
+    /// Writes the loose file (the first save of a session keeps a dated .bak). False with the reason
+    /// in `error` (may be null).
+    wxl_bool(WXL_CALL* save)(sxc_table table, char* error, uint32_t error_size);
+    /// Reads the file again; unsaved edits are lost.
+    void(WXL_CALL* reload)(sxc_table table);
+
+    /// Draws the Data view's editing form of row `index` into the current Dear ImGui window (a panel
+    /// of sxc.ui: the context is shared). A reference followed in it opens a row window.
+    void(WXL_CALL* draw_row_form)(sxc_table table, uint32_t index);
+    /// Opens the row with `id` in a row window of the overlay.
+    void(WXL_CALL* open_row)(sxc_table table, uint32_t id);
 } sxc_data_api;
 
 #ifdef __cplusplus

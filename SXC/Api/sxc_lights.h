@@ -4,7 +4,8 @@
  * puts on model files by data), merges close ones, lets them flicker and hands the nearest to the GPU
  * on a world grid around the camera; each pixel adds its grid cell's lights to the stock light.
  *
- * Vulkan only (our terrain shader for now; models next): on another renderer available() answers false.
+ * Vulkan only: on another renderer available() answers false. The light editor's queries (models near a
+ * point, their attachment points, last frame's lights) answer on any renderer.
  */
 
 #ifndef SXC_API_LIGHTS_H
@@ -121,6 +122,42 @@ typedef struct sxc_lights_stats
     uint32_t shadow_waiting;  ///< lights that should have one and wait their turn (or still moving)
 } sxc_lights_stats;
 
+/// A model in the world scene (the light editor's list).
+typedef struct sxc_lights_model
+{
+    const char* path;          ///< the model file as the client names it; valid until the next call
+    const char* parent_path;   ///< an attached model (an item in a hand): the model it hangs on; else null
+    float       pos[3];        ///< its origin (world)
+    float       distance;      ///< from the point asked about
+    uint32_t    bones, attachments, emitters, own_lights;
+    wxl_bool    animated;      ///< posed this frame (else an attached model's points are unknown)
+} sxc_lights_model;
+
+#define SXC_LIGHTS_POINT_OWN_LIGHT 4u ///< sxc_lights_point.kind: one of the model's own lights (index into them)
+
+/// A place on a model a light can hang on, where it is this frame.
+typedef struct sxc_lights_point
+{
+    uint32_t kind;             ///< SXC_LIGHTS_ATTACH_POINT (index: the attachment ID), _BONE, _EMITTER, SXC_LIGHTS_POINT_OWN_LIGHT
+    int32_t  index;
+    uint32_t bone;
+    float    pos[3];           ///< world
+} sxc_lights_point;
+
+/// A light as it was drawn last frame (after merging).
+typedef struct sxc_lights_active
+{
+    float       pos[3];
+    float       radius;
+    float       color[3];      ///< x brightness, fade and flicker
+    float       cos_outer;     ///< spot: cos of the outer angle; -2 a point light
+    float       spot_dir[3];
+    wxl_bool    indoor;
+    wxl_bool    shadowed;      ///< has a shadow map
+    uint32_t    row_id;        ///< its DoodadLightAssignment row; 0: a model's own light
+    const char* model_path;    ///< the model it is on; valid until the next frame
+} sxc_lights_active;
+
 typedef struct sxc_lights_api
 {
     uint32_t struct_size;
@@ -140,6 +177,23 @@ typedef struct sxc_lights_api
     /// The lights by data (DoodadLightProperties, DoodadLightAssignment); copied. Call again when they
     /// change. Null / 0: none.
     void(WXL_CALL* set_table)(const sxc_lights_kind* kinds, uint32_t kind_count, const sxc_lights_assignment* rows, uint32_t row_count);
+
+    // --- appended 2026-10-23: the light editor (check struct_size) ----------------------------------
+
+    /// The models of the world scene (and the models attached to them) within `range` yd of `pos`,
+    /// nearest first, at most `max`: how many were written.
+    uint32_t(WXL_CALL* models_near)(const float pos[3], float range, sxc_lights_model* out, uint32_t max);
+
+    /// The placed model of file `path` nearest `pos`: its attachment points, particle emitters and own
+    /// lights (and its bones' pivots with `bones`), where they are this frame; how many were written.
+    uint32_t(WXL_CALL* model_points)(const char* path, const float pos[3], wxl_bool bones, sxc_lights_point* out, uint32_t max);
+
+    /// Last frame's drawn lights; how many were written.
+    uint32_t(WXL_CALL* active_lights)(sxc_lights_active* out, uint32_t max);
+
+    /// The assignment rows (ids) whose attachment a model didn't have (placed at its origin) since the
+    /// table was last set; how many were written.
+    uint32_t(WXL_CALL* missing_rows)(uint32_t* out, uint32_t max);
 } sxc_lights_api;
 
 #ifdef __cplusplus

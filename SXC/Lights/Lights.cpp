@@ -9,9 +9,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <iterator>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include "SXC/Api/sxc_lights.h"
@@ -77,11 +79,8 @@ namespace {
         return s;
     }
 
+    // (s_files is trimmed only at the start of a frame's gathering: the lights keep pointers to its names.)
     const FileRows& RowsFor(const CM2Shared* shared) {
-        if (s_files.size() > 16384) {
-            s_files.clear();
-        }
-
         FileRows& f = s_files[shared];
 
         if (f.generation != s_tableGeneration || f.name != shared->m_fileName) {
@@ -115,7 +114,11 @@ namespace {
         bool merged = false;
         uint64_t key = 0;          // which light it is from frame to frame (its model and row / own light)
         bool still = false;        // on a model hanging on nothing (a doodad, a unit): may get a shadow map once it stands
+        uint32_t rowId = 0;        // its DoodadLightAssignment row; 0 a model's own light
+        const std::string* path = nullptr; // its model file (s_files' copy: stable until the next frame's gathering)
     };
+
+    std::unordered_set<uint32_t> s_missingRows;  // assignment ids whose attachment a model lacked (since SetTable)
 
     // A light's identity: its model and which of its lights (a table row, or 0x80000000 | its own index).
     uint64_t LightKey(const CM2Model* model, uint32_t which) {
@@ -128,6 +131,7 @@ namespace {
     std::vector<GpuLight> s_lights;
     std::vector<float> s_strength;   // per light: its brightness before fade and flicker (full cells rank by it)
     std::vector<uint32_t> s_cellLights;
+    std::vector<sxc_lights_active> s_active;   // per drawn light, for the editor
     Frame s_frame;
 
     constexpr int kMaxAttachDepth = 8;
@@ -198,7 +202,7 @@ namespace {
     }
 
     // An assignment's light on one model.
-    void AddRow(const Placement& at, const Row& row, uint64_t key, const C3Vector& camera, float reach) {
+    void AddRow(const Placement& at, const Row& row, uint64_t key, const std::string* path, const C3Vector& camera, float reach) {
         if (row.kind < 0) {
             return;
         }
@@ -232,6 +236,7 @@ namespace {
 
         if (!found) {
             s_stats.attach_missing++;
+            s_missingRows.insert(a.id);
             char key[64];
             std::snprintf(key, sizeof(key), "lights-attach|%u|%u", a.id, s_tableGeneration);
             static const char* const kTypes[] = { "origin", "attachment point", "bone", "particle emitter" };
@@ -266,6 +271,8 @@ namespace {
         f.flickerAmount = k.flicker_amount;
         f.key = key;
         f.still = !at.model->m_attachParent;
+        f.rowId = a.id;
+        f.path = path;
 
         if (k.type == SXC_LIGHTS_SPOT) {
             constexpr float kRad = 3.14159265f / 180.0f;
@@ -294,17 +301,13 @@ namespace {
 
         if (data) {
             const Placement at{ scene, model, model->m_frameStamp == scene->m_frameStamp };
-            bool suppress = false;
+            const FileRows& fileRows = RowsFor(model->m_shared);
+            const bool suppress = fileRows.suppress;
+            s_stats.suppressed += suppress ? 1 : 0;
 
-            if (!s_rows.empty()) {
-                const FileRows& file = RowsFor(model->m_shared);
-                suppress = file.suppress;
-                s_stats.suppressed += suppress ? 1 : 0;
-
-                if (file.rows) {
-                    for (uint32_t r : *file.rows) {
-                        AddRow(at, s_rows[r], LightKey(model, r), camera, reach);
-                    }
+            if (fileRows.rows) {
+                for (uint32_t r : *fileRows.rows) {
+                    AddRow(at, s_rows[r], LightKey(model, r), &fileRows.name, camera, reach);
                 }
             }
 
@@ -349,6 +352,7 @@ namespace {
                 f.distance = Length(f.pos - camera);
                 f.key = LightKey(model, 0x80000000u | i);
                 f.still = !model->m_attachParent;
+                f.path = &fileRows.name;
 
                 if (f.distance <= reach) {
                     s_found.push_back(f);
@@ -1079,9 +1083,179 @@ namespace {
         }
 
         s_tableGeneration++;
+        s_missingRows.clear();
     }
 
-    const sxc_lights_api s_api = { sizeof(sxc_lights_api), Available, SetSettings, Stats, Status, SetTable };
+    // --- the light editor's queries ----------------------------------------------------------------
+    // Every model of the world scene and the models hanging on them, with where its origin is.
+    struct SceneModel {
+        CM2Model* model;
+        C3Vector at;
+        bool animated;
+    };
+
+    void CollectModels(const CM2Scene* scene, CM2Model* model, int depth, std::vector<SceneModel>& out) {
+        if (!model || depth > kMaxAttachDepth) {
+            return;
+        }
+
+        if (model->m_shared && model->m_shared->m_data) {
+            const Placement at{ scene, model, model->m_frameStamp == scene->m_frameStamp };
+            C3Vector p;
+            float scale = 1.0f;
+
+            if (!Place(at, C3Vector(0.0f, 0.0f, 0.0f), 0, nullptr, p, nullptr, scale)) {
+                p = RootOrigin(model);
+            }
+
+            out.push_back(SceneModel{ model, p, at.animated });
+        }
+
+        for (CM2Model* child = model->m_attachList; child; child = child->m_attachNext) {
+            CollectModels(scene, child, depth + 1, out);
+        }
+    }
+
+    std::deque<std::string> s_names;   // the paths handed out by the last call
+
+    const char* Keep(const char* text) {
+        s_names.emplace_back(text ? text : "");
+        return s_names.back().c_str();
+    }
+
+    uint32_t WXL_CALL ModelsNear(const float pos[3], float range, sxc_lights_model* out, uint32_t max) {
+        const CM2Scene* scene = World::s_m2Scene;
+
+        if (!scene || !pos || !out || !max) {
+            return 0;
+        }
+
+        static std::vector<SceneModel> models;
+        models.clear();
+
+        for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
+            CollectModels(scene, model, 0, models);
+        }
+
+        const C3Vector centre(pos[0], pos[1], pos[2]);
+        static std::vector<std::pair<float, uint32_t>> inRange;
+        inRange.clear();
+
+        for (uint32_t i = 0; i < models.size(); i++) {
+            const float d = Length(models[i].at - centre);
+
+            if (d <= range) {
+                inRange.emplace_back(d, i);
+            }
+        }
+
+        std::sort(inRange.begin(), inRange.end());
+        s_names.clear();
+        uint32_t n = 0;
+
+        for (; n < inRange.size() && n < max; n++) {
+            const SceneModel& m = models[inRange[n].second];
+            const M2Data* data = m.model->m_shared->m_data;
+            sxc_lights_model& o = out[n];
+            o = sxc_lights_model{};
+            o.path = Keep(m.model->m_shared->m_fileName);
+            o.parent_path = m.model->m_attachParent && m.model->m_attachParent->m_shared ? Keep(m.model->m_attachParent->m_shared->m_fileName) : nullptr;
+            o.pos[0] = m.at.x;
+            o.pos[1] = m.at.y;
+            o.pos[2] = m.at.z;
+            o.distance = inRange[n].first;
+            o.bones = data->m_bones.m_count;
+            o.attachments = data->m_attachments.m_count;
+            o.emitters = data->m_particles.m_count;
+            o.own_lights = data->m_lights.m_count;
+            o.animated = m.animated ? WXL_TRUE : WXL_FALSE;
+        }
+
+        return n;
+    }
+
+    uint32_t WXL_CALL ModelPoints(const char* path, const float pos[3], wxl_bool bones, sxc_lights_point* out, uint32_t max) {
+        const CM2Scene* scene = World::s_m2Scene;
+
+        if (!scene || !path || !pos || !out || !max) {
+            return 0;
+        }
+
+        static std::vector<SceneModel> models;
+        models.clear();
+
+        for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
+            CollectModels(scene, model, 0, models);
+        }
+
+        const std::string wanted = Normalize(path);
+        const C3Vector centre(pos[0], pos[1], pos[2]);
+        const SceneModel* best = nullptr;
+        float bestDistance = 0.0f;
+
+        for (const SceneModel& m : models) {
+            const float d = Length(m.at - centre);
+
+            if ((!best || d < bestDistance) && Normalize(m.model->m_shared->m_fileName) == wanted) {
+                best = &m;
+                bestDistance = d;
+            }
+        }
+
+        if (!best) {
+            return 0;
+        }
+
+        const Placement at{ scene, best->model, best->animated };
+        const M2Data* data = best->model->m_shared->m_data;
+        uint32_t n = 0;
+
+        auto add = [&](uint32_t kind, int32_t index, uint32_t bone, const C3Vector& local) {
+            C3Vector p;
+            float scale = 1.0f;
+
+            if (n < max && Place(at, local, bone, nullptr, p, nullptr, scale)) {
+                out[n++] = sxc_lights_point{ kind, index, bone, { p.x, p.y, p.z } };
+            }
+        };
+
+        for (uint32_t i = 0; i < data->m_attachments.m_count; i++) {
+            const M2Attachment& a = data->m_attachments[i];
+            add(SXC_LIGHTS_ATTACH_POINT, static_cast<int32_t>(a.m_id), a.m_bone, a.m_position);
+        }
+
+        for (uint32_t i = 0; i < data->m_particles.m_count; i++) {
+            add(SXC_LIGHTS_ATTACH_EMITTER, static_cast<int32_t>(i), data->m_particles[i].m_boneIndex, data->m_particles[i].m_position);
+        }
+
+        for (uint32_t i = 0; i < data->m_lights.m_count; i++) {
+            add(SXC_LIGHTS_POINT_OWN_LIGHT, static_cast<int32_t>(i), data->m_lights[i].m_bone, data->m_lights[i].m_position);
+        }
+
+        for (uint32_t i = 0; bones && i < data->m_bones.m_count; i++) {
+            add(SXC_LIGHTS_ATTACH_BONE, static_cast<int32_t>(i), i, data->m_bones[i].m_pivot);
+        }
+
+        return n;
+    }
+
+    uint32_t WXL_CALL ActiveLights(sxc_lights_active* out, uint32_t max) {
+        const uint32_t n = static_cast<uint32_t>(std::min<size_t>(s_active.size(), out ? max : 0));
+        std::copy(s_active.begin(), s_active.begin() + n, out);
+        return n;
+    }
+
+    uint32_t WXL_CALL MissingRows(uint32_t* out, uint32_t max) {
+        uint32_t n = 0;
+
+        for (auto it = s_missingRows.begin(); out && it != s_missingRows.end() && n < max; ++it) {
+            out[n++] = *it;
+        }
+
+        return n;
+    }
+
+    const sxc_lights_api s_api = { sizeof(sxc_lights_api), Available, SetSettings, Stats, Status, SetTable, ModelsNear, ModelPoints, ActiveLights, MissingRows };
 }
 
 namespace SXC::Lights {
@@ -1177,6 +1351,11 @@ namespace SXC::Lights {
         s_lights.clear();
         s_strength.clear();
         s_lightFound.clear();
+        s_active.clear();
+
+        if (s_files.size() > 16384) {
+            s_files.clear();
+        }
         const CM2Scene* scene = World::s_m2Scene;
 
         if (!Settled() || !scene) {
@@ -1259,6 +1438,23 @@ namespace SXC::Lights {
         s_stats.active = static_cast<uint32_t>(s_lights.size());
         AssignShadows(nowMs);
         BuildGrid(camera, range, cell, perCell);
+
+        // For the light editor's markers.
+        for (uint32_t i = 0; i < s_lights.size(); i++) {
+            const GpuLight& l = s_lights[i];
+            const Found& f = s_found[s_lightFound[i]];
+            sxc_lights_active a = {};
+            std::memcpy(a.pos, l.pos, sizeof a.pos);
+            a.radius = 1.0f / l.invRadius;
+            std::memcpy(a.color, l.color, sizeof a.color);
+            a.cos_outer = l.cosOuter;
+            std::memcpy(a.spot_dir, l.spotDir, sizeof a.spot_dir);
+            a.indoor = l.flags == kLightIndoor ? WXL_TRUE : WXL_FALSE;
+            a.shadowed = l.shadow > 0.0f ? WXL_TRUE : WXL_FALSE;
+            a.row_id = f.rowId;
+            a.model_path = f.path ? f.path->c_str() : "";
+            s_active.push_back(a);
+        }
 
         // The view back to the world (row vectors: world = view x the view's inverse), a row per world axis.
         const C44Matrix& vi = scene->m_viewInv;
