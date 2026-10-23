@@ -12,13 +12,14 @@ struct Light
     vec4 posInvRadius;    // world position, 1 / radius
     vec4 colorFalloff;    // colour (x brightness, fade, flicker), the window's power
     vec4 spotDirCos;      // where a spot points (world), cos of its outer angle (-2: a point light)
-    vec4 extra;           // 1 / (cos inner - cos outer), flags, 0, 0
+    vec4 extra;           // 1 / (cos inner - cos outer), flags, its shadow map's slot + 1 (0: none), 0
 };
 
 layout(std430, set = 3, binding = 0) readonly buffer LightBlock {
     vec4  lightGrid;      // corner x, y, 1 / cell size, cells per side
     vec4  lightInfo;      // lights per cell, lights, on, debug view
     vec4  lightViewInv[3]; // the world scene's view back to the world: world = (dot(row, (view, 1))) per row
+    vec4  lightShadowInfo; // the shadow maps: texels per face side, 1 / that, the near plane (yd), 0
     Light lights[];
 };
 
@@ -45,10 +46,54 @@ layout(std140, set = 3, binding = 2) uniform LightSurface {
     vec4 lightSurface;
 };
 
+// The cube shadow maps of the nearest still lights (Vulkan/Shadows.cpp): six layers per slot (face =
+// axis x 2 + (negative ? 1 : 0)), drawn from the WMO and terrain triangles around the light
+// (LightShadow.vert); compared in hardware (1 lit, 0 shadowed).
+layout(set = 3, binding = 3) uniform sampler2DArrayShadow lightShadows;
+
 const int kMaxLightsPerCell = 32;
 
 bool LightsOn() { return lightInfo.z > 0.5; }
 int LightsDebug() { return int(lightInfo.w + 0.5); }
+
+// How much of a light with a shadow map reaches a world point with a world normal (unit): 1 lit, 0 in
+// its shadow; `d` the distance to the light. The point is pushed out along its normal by a texel and a
+// half at its distance (no acne on the surface the map saw), then the face its direction falls on is
+// read as LightShadow.vert drew it, four taps a texel apart (the hardware filters each 2 x 2: soft edges).
+float LightShadow(Light l, vec3 p, vec3 n, float d)
+{
+    int slot = int(l.extra.z + 0.5) - 1;
+
+    if (slot < 0)
+    {
+        return 1.0;
+    }
+
+    float near = lightShadowInfo.z;
+    float far = 1.0 / l.posInvRadius.w;
+    vec3 v = p + n * (3.0 * d * lightShadowInfo.y) - l.posInvRadius.xyz;
+    vec3 a = abs(v);
+    int axis = a.x >= a.y && a.x >= a.z ? 0 : (a.y >= a.z ? 1 : 2);
+    float m = a[axis];
+
+    if (m <= near)
+    {
+        return 1.0;
+    }
+
+    vec2 uv = axis == 0 ? v.yz : (axis == 1 ? v.zx : v.xy);
+    uv = uv / m * 0.5 + 0.5;
+    float layer = float(slot * 6 + axis * 2 + (v[axis] < 0.0 ? 1 : 0));
+    float depth = far / (far - near) - far * near / ((far - near) * m);
+    // Explicit gradients (level 0): the lights' loop is not uniform control flow.
+    float t = lightShadowInfo.y;
+    vec2 g = vec2(0.0);
+    float lit = textureGrad(lightShadows, vec4(uv + vec2(-0.5, -0.5) * t, layer, depth), g, g)
+              + textureGrad(lightShadows, vec4(uv + vec2(0.5, -0.5) * t, layer, depth), g, g)
+              + textureGrad(lightShadows, vec4(uv + vec2(-0.5, 0.5) * t, layer, depth), g, g)
+              + textureGrad(lightShadows, vec4(uv + vec2(0.5, 0.5) * t, layer, depth), g, g);
+    return lit * 0.25;
+}
 
 // The first entry of a world point's cell (clamped to the grid: a light past its radius adds nothing).
 int LightCellFirst(vec2 xy)
@@ -89,8 +134,11 @@ vec3 LightsAt(vec3 p, vec3 n, out int count)
 
         Light l = lights[index];
 
-        // Inside and outside apart: a light lights its own side's surfaces only (models both).
-        if (surface != 0 && (l.extra.y > 0.5 ? 2 : 1) != surface)
+        // Inside and outside apart: a light lights its own side's surfaces only (models both). A light
+        // with a shadow map needs no such guess: its walls, floors and roofs are in the map.
+        bool shadowed = l.extra.z > 0.5;
+
+        if (!shadowed && surface != 0 && (l.extra.y > 0.5 ? 2 : 1) != surface)
         {
             continue;
         }
@@ -112,6 +160,12 @@ vec3 LightsAt(vec3 p, vec3 n, out int count)
         float spot = clamp((dot(-dir, l.spotDirCos.xyz) - l.spotDirCos.w) * l.extra.x, 0.0, 1.0);
         float s = sqrt(d2 + 1.0);
         float strength = window * lambert * spot / ((0.7 + 0.03 * s) * s);
+
+        if (shadowed && strength > 0.0)
+        {
+            strength *= LightShadow(l, p, n, d);
+        }
+
         sum += l.colorFalloff.rgb * strength;
         count += strength > 0.0 ? 1 : 0;
     }

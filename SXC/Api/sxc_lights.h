@@ -38,8 +38,15 @@ typedef struct sxc_lights_settings
     float    flicker;         ///< 0..1: how much a flame dips (each light its own phase)
     float    flicker_speed;   ///< x the default pace (~3 dips a second)
     /// Inside and outside apart: a light inside an indoor WMO group lights only indoor surfaces (indoor
-    /// WMO groups), one outside only outdoor ones (the terrain, outdoor groups); models take both.
+    /// WMO groups), one outside only outdoor ones (the terrain, outdoor groups); models take both. Lights
+    /// with a shadow map don't need it (their walls, floors and roofs are in the map).
     wxl_bool separate_indoor;
+    /// Shadows: the nearest lights that stand still get a cube shadow map of the WMOs and the terrain
+    /// around them (walls between rooms, floors, roofs); drawn once and kept until the light moves or its
+    /// surroundings change (a WMO finishing loading).
+    wxl_bool shadows;
+    int32_t  shadow_count;    ///< lights with a shadow map at most (the nearest), up to the device's (stats.shadow_slots)
+    int32_t  shadow_updates;  ///< shadow maps drawn per frame at most
 } sxc_lights_settings;
 
 /// What a light is (a DoodadLightProperties row). Negative values (and flicker_mode -1) take the
@@ -107,6 +114,11 @@ typedef struct sxc_lights_stats
     uint32_t indoor;          ///< drawn lights inside an indoor WMO group
     uint32_t indoor_tests;    ///< points located this frame (the rest from the cache)
     uint32_t model_tests;     ///< models located this frame (for which lights they take)
+    uint32_t shadow_slots;    ///< shadow maps the device holds (0: none)
+    uint32_t shadowed;        ///< drawn lights with a shadow map
+    uint32_t shadow_draws;    ///< shadow maps drawn this frame
+    uint32_t shadow_triangles;///< triangles in them
+    uint32_t shadow_waiting;  ///< lights that should have one and wait their turn (or still moving)
 } sxc_lights_stats;
 
 typedef struct sxc_lights_api

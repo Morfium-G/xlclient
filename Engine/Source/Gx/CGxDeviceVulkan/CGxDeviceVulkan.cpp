@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <vector>
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Fog.hpp"  // SXC: volumetric fog
@@ -254,7 +255,9 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         gxvk::vk::cover::SetProvider(&CGxDeviceVulkan::SxcCoverFrame);                  // SXC: surface covers
         SXC::Cover::SetDevice(gxvk::vk::cover::Ready(), gxvk::vk::cover::TextureSlots(), &gxvk::vk::cover::Status);
         gxvk::vk::lights::SetProvider(&CGxDeviceVulkan::SxcLightsFrame);                // SXC: point lights
+        gxvk::vk::lights::SetShadowReport(&SXC::Lights::ShadowsDrawn);
         SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
+        SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
     }
 }
 
@@ -283,6 +286,19 @@ bool CGxDeviceVulkan::SxcLightsFrame(gxvk::vk::lights::Frame& out) {
     out.lights = in.lights;
     out.cellLights = in.cellLights;
     std::memcpy(out.viewInv, in.viewInv, sizeof out.viewInv);
+
+    static std::vector<gxvk::vk::shadows::Job> jobs;
+    jobs.resize(in.shadowJobCount);
+
+    for (uint32_t i = 0; i < in.shadowJobCount; i++) {
+        jobs[i].slot = in.shadowJobs[i].slot;
+        jobs[i].radius = in.shadowJobs[i].radius;
+        jobs[i].vertices = in.shadowJobs[i].vertices;
+        jobs[i].vertexCount = in.shadowJobs[i].vertexCount;
+    }
+
+    out.shadowJobs = jobs.empty() ? nullptr : jobs.data();
+    out.shadowJobCount = in.shadowJobCount;
     return true;
 }
 

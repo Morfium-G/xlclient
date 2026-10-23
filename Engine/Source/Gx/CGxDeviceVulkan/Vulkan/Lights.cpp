@@ -32,8 +32,10 @@ namespace
     constexpr uint32_t kSlots      = frame::kFramesInFlight;
     constexpr uint32_t kLightBytes = 64;
     /// Shaders/Lights.glsl's LightBlock: the grid (origin x, y, 1 / cell, cells), the info (per cell,
-    /// lights, on, debug), the view's inverse (three rows), then the lights.
-    constexpr VkDeviceSize kHeaderBytes = 80;
+    /// lights, on, debug), the view's inverse (three rows), the shadow maps (face size, 1 / it, near),
+    /// then the lights.
+    constexpr VkDeviceSize kHeaderBytes = 96;
+    constexpr uint32_t kBindings = 4;
     constexpr VkDeviceSize kLightsBytes = kHeaderBytes + kMaxLights * kLightBytes;
     constexpr VkDeviceSize kCellsBytes  = static_cast<VkDeviceSize>(kMaxCells) * kMaxCells * kMaxPerCell * sizeof(uint32_t);
     /// Binding 2 (LightSurface): one vec4 per surface class, each at its own aligned offset.
@@ -54,6 +56,7 @@ namespace
         VkDevice              device = nullptr;
         const loader::Device* dapi   = nullptr;
         gxvk::vk::lights::Provider provider = nullptr;
+        gxvk::vk::lights::ShadowReport shadowReport = nullptr;
         VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
         VkDescriptorPool      pool      = VK_NULL_HANDLE;
         Slot                  slots[kSlots];
@@ -75,6 +78,7 @@ namespace
 namespace gxvk::vk::lights
 {
     void SetProvider(Provider provider) { s.provider = provider; }
+    void SetShadowReport(ShadowReport report) { s.shadowReport = report; }
     bool Ready() { return s.ready; }
     VkDescriptorSetLayout SetLayout() { return s.setLayout; }
     const char* Status() { return s.status; }
@@ -89,33 +93,45 @@ namespace gxvk::vk::lights
         s.dapi   = h->dapi;
         const loader::Device& d = *s.dapi;
 
+        // The shadow maps are part of the set: without them, no lights.
+        if (!gxvk::vk::shadows::Init())
+        {
+            Write(Error, "vulkan: lights: the shadow maps could not be made (see above)");
+            s.failed = true;
+            return false;
+        }
+
         // Read where the pixels are lit (and where the vertices or the tessellation may light later).
         VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         if (context::Caps().enabled & gxvk::vk::kCapTessellation)
             stages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
-        VkDescriptorSetLayoutBinding bindings[3] = {};
-        for (uint32_t i = 0; i < 3; ++i)
+        VkDescriptorSetLayoutBinding bindings[kBindings] = {};
+        const VkDescriptorType types[kBindings] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
+        for (uint32_t i = 0; i < kBindings; ++i)
         {
             bindings[i].binding         = i;
-            bindings[i].descriptorType  = i < 2 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[i].descriptorType  = types[i];
             bindings[i].descriptorCount = 1;
             bindings[i].stageFlags      = stages;
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayout.bindingCount = 3;
+        setLayout.bindingCount = kBindings;
         setLayout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
-        VkDescriptorPoolSize sizes[2] = {};
+        VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         sizes[0].descriptorCount = 2 * kSurfaceCount * kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[1].descriptorCount = kSurfaceCount * kSlots;
+        sizes[2].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[2].descriptorCount = kSurfaceCount * kSlots;
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool.maxSets       = kSurfaceCount * kSlots;
-        pool.poolSizeCount = 2;
+        pool.poolSizeCount = 3;
         pool.pPoolSizes    = sizes;
         if (!Check(d.CreateDescriptorPool(s.device, &pool, nullptr, &s.pool), "vkCreateDescriptorPool")) return false;
 
@@ -135,17 +151,19 @@ namespace gxvk::vk::lights
 
         auto write = [&](VkDescriptorSet set, VkBuffer lights, VkDeviceSize lightsBytes, VkBuffer cells, VkDeviceSize cellsBytes, uint32_t surface) {
             VkDescriptorBufferInfo infos[3] = { { lights, 0, lightsBytes }, { cells, 0, cellsBytes }, { s.classes.handle, surface * kClassStride, 16 } };
-            VkWriteDescriptorSet writes[3] = {};
-            for (uint32_t i = 0; i < 3; ++i)
+            VkDescriptorImageInfo shadowMaps = { gxvk::vk::shadows::Sampler(), gxvk::vk::shadows::View(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+            VkWriteDescriptorSet writes[kBindings] = {};
+            for (uint32_t i = 0; i < kBindings; ++i)
             {
                 writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[i].dstSet          = set;
                 writes[i].dstBinding      = i;
                 writes[i].descriptorCount = 1;
-                writes[i].descriptorType  = i < 2 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                writes[i].pBufferInfo     = &infos[i];
+                writes[i].descriptorType  = types[i];
+                if (i < 3) writes[i].pBufferInfo = &infos[i];
+                else writes[i].pImageInfo = &shadowMaps;
             }
-            d.UpdateDescriptorSets(s.device, 3, writes, 0, nullptr);
+            d.UpdateDescriptorSets(s.device, kBindings, writes, 0, nullptr);
         };
 
         for (Slot& slot : s.slots)
@@ -193,7 +211,15 @@ namespace gxvk::vk::lights
         const bool on = s.provider && s.provider(f) && f.on && f.cells > 0 && f.cells <= kMaxCells && f.perCell > 0 && f.perCell <= kMaxPerCell
                         && f.cellLights && f.lightCount <= kMaxLights && (f.lightCount == 0 || f.lights);
 
-        float header[20] = {};
+        // The shadow maps first, into the pre-pass (ahead of every draw of the frame); the first frame
+        // also lays out every layer, lights or none.
+        const uint32_t drawn = gxvk::vk::shadows::Record(on ? f.shadowJobs : nullptr, on && f.shadowJobs ? f.shadowJobCount : 0);
+        if (on && s.shadowReport) s.shadowReport(drawn);
+
+        float header[24] = {};
+        header[20] = static_cast<float>(gxvk::vk::shadows::kFaceSize);
+        header[21] = 1.0f / static_cast<float>(gxvk::vk::shadows::kFaceSize);
+        header[22] = gxvk::vk::shadows::kNear;
         if (on)
         {
             header[0] = f.originX;
@@ -223,9 +249,12 @@ namespace gxvk::vk::lights
     {
         if (!s.dapi || !s.device)
         {
+            gxvk::vk::shadows::Shutdown();
             const Provider provider = s.provider;
+            const ShadowReport report = s.shadowReport;
             s = State();
             s.provider = provider;
+            s.shadowReport = report;
             return;
         }
         const loader::Device& d = *s.dapi;
@@ -238,8 +267,11 @@ namespace gxvk::vk::lights
         memory::DestroyBuffer(s.classes);
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);
         if (s.setLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.setLayout, nullptr);
+        gxvk::vk::shadows::Shutdown();
         const Provider provider = s.provider;
+        const ShadowReport report = s.shadowReport;
         s = State();
         s.provider = provider;   // the device's, kept for the next bring-up
+        s.shadowReport = report;
     }
 }

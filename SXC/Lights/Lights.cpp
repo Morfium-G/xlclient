@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -21,9 +23,12 @@
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "WoW/Source/WorldClient/CMapBaseObjLink.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapChunk.h"
+#include "WoW/Source/WorldClient/MapObj.h"
 #include "WoW/Source/WorldClient/MapObjDef.h"
+#include "WoW/Source/WorldClient/MapObjGroup.h"
 #include "WoW/Source/WorldClient/World.h"
 
 namespace {
@@ -39,7 +44,7 @@ namespace {
     bool s_haveSettings = false;
 
     sxc_lights_stats s_stats = {};
-    char s_status[512] = "";
+    char s_status[768] = "";
 
     // --- the lights by data ------------------------------------------------------------------------
     struct Row {
@@ -108,7 +113,16 @@ namespace {
         float flickerSpeed = -1.0f, flickerAmount = -1.0f;
         float distance = 0.0f;     // from the camera
         bool merged = false;
+        uint64_t key = 0;          // which light it is from frame to frame (its model and row / own light)
+        bool still = false;        // on a model hanging on nothing (a doodad, a unit): may get a shadow map once it stands
     };
+
+    // A light's identity: its model and which of its lights (a table row, or 0x80000000 | its own index).
+    uint64_t LightKey(const CM2Model* model, uint32_t which) {
+        uint64_t k = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(model)) * 0x9E3779B97F4A7C15ull;
+        k ^= (static_cast<uint64_t>(which) + 1) * 0xC2B2AE3D27D4EB4Full;
+        return k ? k : 1;
+    }
 
     std::vector<Found> s_found;
     std::vector<GpuLight> s_lights;
@@ -184,7 +198,7 @@ namespace {
     }
 
     // An assignment's light on one model.
-    void AddRow(const Placement& at, const Row& row, const C3Vector& camera, float reach) {
+    void AddRow(const Placement& at, const Row& row, uint64_t key, const C3Vector& camera, float reach) {
         if (row.kind < 0) {
             return;
         }
@@ -250,6 +264,8 @@ namespace {
         f.flickerMode = k.flicker_mode;
         f.flickerSpeed = k.flicker_speed;
         f.flickerAmount = k.flicker_amount;
+        f.key = key;
+        f.still = !at.model->m_attachParent;
 
         if (k.type == SXC_LIGHTS_SPOT) {
             constexpr float kRad = 3.14159265f / 180.0f;
@@ -287,7 +303,7 @@ namespace {
 
                 if (file.rows) {
                     for (uint32_t r : *file.rows) {
-                        AddRow(at, s_rows[r], camera, reach);
+                        AddRow(at, s_rows[r], LightKey(model, r), camera, reach);
                     }
                 }
             }
@@ -331,6 +347,8 @@ namespace {
                 }
 
                 f.distance = Length(f.pos - camera);
+                f.key = LightKey(model, 0x80000000u | i);
+                f.still = !model->m_attachParent;
 
                 if (f.distance <= reach) {
                     s_found.push_back(f);
@@ -406,6 +424,7 @@ namespace {
                     keep.color = keep.color + other.color;
                     keep.radius = std::fmax(keep.radius, other.radius);
                     keep.distance = std::fmin(keep.distance, other.distance);
+                    keep.still = keep.still && other.still;
                     wa += wb;
                     other.merged = true;
                     s_stats.merged++;
@@ -591,6 +610,403 @@ namespace {
         return C3Vector(model->m_worldTransform.d0, model->m_worldTransform.d1, model->m_worldTransform.d2);
     }
 
+    // --- shadows ----------------------------------------------------------------------------------
+    // The nearest lights that stand still get a cube shadow map (the device's Vulkan/Shadows): the WMO
+    // and terrain triangles within their radius, gathered here from the client's own data (each loaded
+    // WMO group's triangles through its placement; the terrain chunks' heights, holes left open) and
+    // drawn once into a slot; kept while the light stays within kShadowMoved of where it was drawn and
+    // its surroundings don't change (a signature of the groups and chunks it reaches, rechecked every
+    // few seconds: a WMO group or a chunk finishing loading). WMO faces that only collide (material
+    // 0xFF) or are see-through (blended materials: windows) cast nothing. Models cast nothing.
+    std::vector<uint32_t> s_lightFound;   // per drawn light: its index in s_found
+
+    uint32_t s_shadowSlotCount = 0;       // the device's
+    uint32_t s_shadowMaxVertices = 0;
+
+    struct ShadowSlot {
+        uint64_t key = 0;
+        C3Vector pos;
+        float radius = 0.0f;
+        uint32_t signature = 0;
+        bool valid = false;        // drawn for this key, position and radius
+        uint32_t usedFrame = 0;
+        uint32_t checkMs = 0;      // when to look at its surroundings again
+    };
+    std::vector<ShadowSlot> s_shadowSlots;
+    uint32_t s_shadowFrame = 0;
+
+    // Where each keyed light has been standing, and since when (a light that moves gets no map until it
+    // has stood kShadowSettleMs within kShadowMoved of one place).
+    struct Anchor {
+        C3Vector at;
+        uint32_t sinceMs = 0;
+        uint32_t seenMs = 0;
+    };
+    std::unordered_map<uint64_t, Anchor> s_anchors;
+
+    constexpr float kShadowMoved = 0.35f;
+    constexpr uint32_t kShadowSettleMs = 1000;
+    constexpr uint32_t kShadowChecksPerFrame = 8;
+    constexpr uint32_t kShadowMaxPerLight = 256 * 1024;   // vertices
+    constexpr float kShadowKeepBonus = 4.0f;              // yd nearer a light that has its map counts as (no flapping at the edge)
+
+    std::vector<float> s_shadowVertices;
+    std::vector<ShadowJob> s_shadowJobs;
+    std::vector<uint32_t> s_shadowJobSlots;
+
+    // An axis-aligned box against a sphere.
+    bool BoxReaches(const CAaBox& b, const C3Vector& c, float r) {
+        const float dx = c.x < b.b.x ? b.b.x - c.x : (c.x > b.t.x ? c.x - b.t.x : 0.0f);
+        const float dy = c.y < b.b.y ? b.b.y - c.y : (c.y > b.t.y ? c.y - b.t.y : 0.0f);
+        const float dz = c.z < b.b.z ? b.b.z - c.z : (c.z > b.t.z ? c.z - b.t.z : 0.0f);
+        return dx * dx + dy * dy + dz * dz <= r * r;
+    }
+
+    // A triangle's box against a sphere (conservative).
+    bool TriangleReaches(const C3Vector& a, const C3Vector& b, const C3Vector& c, const C3Vector& centre, float r) {
+        CAaBox box;
+        box.b = C3Vector(std::fmin(a.x, std::fmin(b.x, c.x)), std::fmin(a.y, std::fmin(b.y, c.y)), std::fmin(a.z, std::fmin(b.z, c.z)));
+        box.t = C3Vector(std::fmax(a.x, std::fmax(b.x, c.x)), std::fmax(a.y, std::fmax(b.y, c.y)), std::fmax(a.z, std::fmax(b.z, c.z)));
+        return BoxReaches(box, centre, r);
+    }
+
+    uint32_t Mix(uint32_t h, uint64_t v) {
+        for (int i = 0; i < 8; i++, v >>= 8) {
+            h = (h ^ static_cast<uint32_t>(v & 0xFF)) * 16777619u;
+        }
+
+        return h;
+    }
+
+    struct Gathered {
+        std::vector<float>* out = nullptr;   // null: the signature only
+        C3Vector centre;
+        float radius = 0.0f;
+        uint32_t limit = 0;                  // vertices at most (out's size may grow by that much)
+        uint32_t added = 0;
+        bool truncated = false;
+
+        void Add(const C3Vector& a, const C3Vector& b, const C3Vector& c) {
+            if (added + 3 > limit) {
+                truncated = true;
+                return;
+            }
+
+            const C3Vector v[3] = { a - centre, b - centre, c - centre };
+
+            for (const C3Vector& p : v) {
+                out->push_back(p.x);
+                out->push_back(p.y);
+                out->push_back(p.z);
+            }
+
+            added += 3;
+        }
+    };
+
+    // What a light's map is drawn from (into g.out when set); the surroundings' signature either way.
+    uint32_t Gather(Gathered& g) {
+        uint32_t h = 2166136261u;
+        static std::vector<C3Vector> world;
+
+        for (CMapObjDef* def = CMap::mapObjDefHash.m_fulllist.Head(); def; def = CMap::mapObjDefHash.m_fulllist.Next(def)) {
+            if ((static_cast<uint32_t>(def->m_flags) & 0x20) || !BoxReaches(def->m_bbox, g.centre, g.radius)) {
+                continue;
+            }
+
+            CMapObj* obj = def->m_owner;
+            h = Mix(h, reinterpret_cast<uintptr_t>(def));
+
+            if (!obj || !obj->m_isGroupLoaded) {
+                h = Mix(h, 1);
+                continue;
+            }
+
+            for (CMapBaseObjLink* link = def->m_mapObjDefGroupLinkList.Head(); link; link = def->m_mapObjDefGroupLinkList.Next(link)) {
+                const CMapObjDefGroup* defGroup = static_cast<const CMapObjDefGroup*>(link->m_owner);
+
+                if (!defGroup || !BoxReaches(defGroup->m_bbox, g.centre, g.radius)) {
+                    continue;
+                }
+
+                CMapObjGroup* group = obj->GetGroup(defGroup->m_groupNum, 0);
+                h = Mix(h, group ? reinterpret_cast<uintptr_t>(group) : 2);
+
+                if (!g.out || !group || !group->m_vertexList || !group->m_indices || !group->m_polyList || group->m_vertexListCount <= 0) {
+                    continue;
+                }
+
+                world.resize(static_cast<size_t>(group->m_vertexListCount));
+
+                for (int32_t v = 0; v < group->m_vertexListCount; v++) {
+                    world[v] = group->m_vertexList[v] * def->m_mat;
+                }
+
+                const int32_t triangles = std::min(group->m_indicesCount / 3, group->m_polyListSize);
+
+                for (int32_t t = 0; t < triangles; t++) {
+                    const SMOPoly& poly = group->m_polyList[t];
+
+                    if (poly.m_materialId == 0xFF || (obj->m_materialList && obj->m_materialList[poly.m_materialId].m_blendMode >= 2)) {
+                        continue;
+                    }
+
+                    const uint16_t* i = &group->m_indices[t * 3];
+
+                    if (i[0] >= world.size() || i[1] >= world.size() || i[2] >= world.size()) {
+                        continue;
+                    }
+
+                    if (TriangleReaches(world[i[0]], world[i[1]], world[i[2]], g.centre, g.radius)) {
+                        g.Add(world[i[0]], world[i[1]], world[i[2]]);
+                    }
+                }
+            }
+        }
+
+        for (CMapChunk* chunk = CMap::s_mapChunkList.Head(); chunk; chunk = CMap::s_mapChunkList.Next(chunk)) {
+            if (!chunk->m_height || !chunk->m_header) {
+                continue;
+            }
+
+            // Its box's x and y are its place on the map; its heights may not be in z yet.
+            CAaBox box = chunk->m_bbox;
+
+            if (!(box.b.z <= box.t.z)) {
+                box.b.z = -1e9f;
+                box.t.z = 1e9f;
+            }
+
+            if (!BoxReaches(box, g.centre, g.radius)) {
+                continue;
+            }
+
+            h = Mix(h, reinterpret_cast<uintptr_t>(chunk));
+
+            if (!g.out) {
+                continue;
+            }
+
+            const uint32_t holes = chunk->m_header->m_holes;
+
+            // 9 x 9 outer vertices with 8 x 8 inner ones between them (rows of 9 then 8): each cell is
+            // four triangles around its inner vertex.
+            for (int32_t y = 0; y < 8; y++) {
+                for (int32_t x = 0; x < 8; x++) {
+                    if (holes & CMap::s_holeMask[4 * (y >> 1) + (x >> 1)]) {
+                        continue;
+                    }
+
+                    C3Vector a, b, c, d, e;
+                    chunk->GetVertexPosition(17 * y + x, &a);
+                    chunk->GetVertexPosition(17 * y + x + 1, &b);
+                    chunk->GetVertexPosition(17 * y + 9 + x, &c);
+                    chunk->GetVertexPosition(17 * (y + 1) + x, &d);
+                    chunk->GetVertexPosition(17 * (y + 1) + x + 1, &e);
+                    const C3Vector* tris[4][3] = { { &a, &b, &c }, { &b, &e, &c }, { &e, &d, &c }, { &d, &a, &c } };
+
+                    for (const auto& t : tris) {
+                        if (TriangleReaches(*t[0], *t[1], *t[2], g.centre, g.radius)) {
+                            g.Add(*t[0], *t[1], *t[2]);
+                        }
+                    }
+                }
+            }
+        }
+
+        return h;
+    }
+
+    // Which drawn lights get a shadow map this frame, and which maps are drawn. Lights in s_lights,
+    // s_lightFound filled; sets GpuLight::shadow, fills s_shadowJobs.
+    void AssignShadows(uint32_t nowMs) {
+        s_shadowJobs.clear();
+        s_shadowJobSlots.clear();
+        s_shadowVertices.clear();
+        s_stats.shadow_slots = s_shadowSlotCount;
+        s_shadowFrame++;
+
+        if (!s_settings.shadows || !s_shadowSlotCount) {
+            return;
+        }
+
+        if (s_shadowSlots.size() != s_shadowSlotCount) {
+            s_shadowSlots.assign(s_shadowSlotCount, ShadowSlot{});
+        }
+
+        // Where each keyed light stands.
+        if (s_anchors.size() > 4096) {
+            for (auto it = s_anchors.begin(); it != s_anchors.end();) {
+                it = nowMs - it->second.seenMs > 10000 ? s_anchors.erase(it) : std::next(it);
+            }
+        }
+
+        struct Candidate {
+            float score;
+            uint32_t light;
+        };
+        static std::vector<Candidate> candidates;
+        candidates.clear();
+        static std::unordered_map<uint64_t, uint32_t> slotOf;
+        slotOf.clear();
+
+        for (uint32_t s = 0; s < s_shadowSlots.size(); s++) {
+            if (s_shadowSlots[s].key) {
+                slotOf[s_shadowSlots[s].key] = s;
+            }
+        }
+
+        for (uint32_t i = 0; i < s_lights.size(); i++) {
+            const Found& f = s_found[s_lightFound[i]];
+
+            if (!f.key || !f.still) {
+                continue;
+            }
+
+            Anchor& a = s_anchors[f.key];
+            const C3Vector moved = f.pos - a.at;
+
+            if (!a.seenMs || moved.x * moved.x + moved.y * moved.y + moved.z * moved.z > kShadowMoved * kShadowMoved) {
+                a.at = f.pos;
+                a.sinceMs = nowMs;
+            }
+
+            a.seenMs = nowMs;
+
+            if (nowMs - a.sinceMs < kShadowSettleMs) {
+                s_stats.shadow_waiting++;
+                continue;
+            }
+
+            const auto held = slotOf.find(f.key);
+            const bool hasMap = held != slotOf.end() && s_shadowSlots[held->second].valid;
+            candidates.push_back(Candidate{ f.distance - (hasMap ? kShadowKeepBonus : 0.0f), i });
+        }
+
+        const uint32_t wanted = std::min(static_cast<uint32_t>(std::max(s_settings.shadow_count, 0)), s_shadowSlotCount);
+
+        if (candidates.size() > wanted) {
+            std::nth_element(candidates.begin(), candidates.begin() + wanted, candidates.end(),
+                             [](const Candidate& a, const Candidate& b) { return a.score < b.score; });
+            candidates.resize(wanted);
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) { return a.score < b.score; });
+
+        // The chosen keep their slots this frame (marked first, so a newcomer never takes one of theirs).
+        for (const Candidate& c : candidates) {
+            const auto held = slotOf.find(s_found[s_lightFound[c.light]].key);
+
+            if (held != slotOf.end()) {
+                s_shadowSlots[held->second].usedFrame = s_shadowFrame;
+            }
+        }
+
+        const uint32_t updates = static_cast<uint32_t>(std::max(s_settings.shadow_updates, 0));
+        uint32_t checks = 0;
+        std::vector<std::pair<size_t, uint32_t>> ranges; // per job: first float, vertex count
+
+        for (const Candidate& c : candidates) {
+            GpuLight& light = s_lights[c.light];
+            const Found& f = s_found[s_lightFound[c.light]];
+            const float radius = 1.0f / light.invRadius;
+            const auto held = slotOf.find(f.key);
+            uint32_t slot = 0;
+            bool draw = false, usable = false;
+
+            if (held != slotOf.end()) {
+                slot = held->second;
+                ShadowSlot& s = s_shadowSlots[slot];
+                const C3Vector d = f.pos - s.pos;
+                const bool moved = d.x * d.x + d.y * d.y + d.z * d.z > kShadowMoved * kShadowMoved || std::fabs(s.radius - radius) > 0.05f * radius;
+                usable = s.valid && !moved;
+                draw = !usable;
+
+                // Its surroundings, now and then (an old map still serves while a new one waits).
+                if (usable && nowMs >= s.checkMs && checks < kShadowChecksPerFrame) {
+                    checks++;
+                    s.checkMs = nowMs + 2000 + static_cast<uint32_t>(f.key % 1000);
+                    Gathered sig;
+                    sig.centre = s.pos;
+                    sig.radius = s.radius;
+                    draw = Gather(sig) != s.signature;
+                }
+            } else {
+                // A free slot, else the one unused longest (never one chosen this frame).
+                uint32_t best = UINT32_MAX;
+
+                for (uint32_t s = 0; s < s_shadowSlots.size(); s++) {
+                    const ShadowSlot& o = s_shadowSlots[s];
+
+                    if (o.usedFrame == s_shadowFrame) {
+                        continue;
+                    }
+
+                    if (best == UINT32_MAX || !o.key || (s_shadowSlots[best].key && o.usedFrame < s_shadowSlots[best].usedFrame)) {
+                        best = s;
+
+                        if (!o.key) {
+                            break;
+                        }
+                    }
+                }
+
+                if (best == UINT32_MAX) {
+                    continue;
+                }
+
+                slot = best;
+                ShadowSlot& s = s_shadowSlots[slot];
+                slotOf.erase(s.key);
+                s = ShadowSlot{};
+                s.key = f.key;
+                slotOf[f.key] = slot;
+                draw = true;
+            }
+
+            ShadowSlot& s = s_shadowSlots[slot];
+            s.usedFrame = s_shadowFrame;
+
+            if (draw && s_shadowJobs.size() < updates && s_shadowVertices.size() / 3 < s_shadowMaxVertices) {
+                Gathered g;
+                g.out = &s_shadowVertices;
+                g.centre = f.pos;
+                g.radius = radius;
+                g.limit = std::min(kShadowMaxPerLight, s_shadowMaxVertices - static_cast<uint32_t>(s_shadowVertices.size() / 3));
+                const size_t first = s_shadowVertices.size();
+                s.signature = Gather(g);
+
+                if (g.truncated) {
+                    SXC::LogOnce("lights-shadow-full", "lights: a shadow map was cut short at %u triangles (light at %.1f %.1f %.1f, radius %.1f)", g.added / 3, f.pos.x,
+                                 f.pos.y, f.pos.z, radius);
+                }
+
+                s.pos = f.pos;
+                s.radius = radius;
+                s.valid = true;
+                s.checkMs = nowMs + 2000 + static_cast<uint32_t>(f.key % 1000);
+                s_shadowJobs.push_back(ShadowJob{ slot, radius, nullptr, g.added });
+                s_shadowJobSlots.push_back(slot);
+                ranges.emplace_back(first, g.added);
+                s_stats.shadow_draws++;
+                s_stats.shadow_triangles += g.added / 3;
+                usable = true;
+            } else if (draw && !usable) {
+                s_stats.shadow_waiting++;
+            }
+
+            if (usable) {
+                light.shadow = static_cast<float>(slot + 1);
+                s_stats.shadowed++;
+            }
+        }
+
+        // The vertices are all in place: point the jobs at them.
+        for (size_t j = 0; j < s_shadowJobs.size(); j++) {
+            s_shadowJobs[j].vertices = ranges[j].second ? s_shadowVertices.data() + ranges[j].first : nullptr;
+        }
+    }
+
     // --- the service -------------------------------------------------------------------------------
     wxl_bool WXL_CALL Available() { return s_available ? WXL_TRUE : WXL_FALSE; }
 
@@ -627,10 +1043,12 @@ namespace {
                       "%u models; their own point lights %u (%u placed by the client this frame; left out on %u models by the table); "
                       "%u table lights (%u at the model's origin: attachment missing)\n"
                       "%u in range, %u merged, %u drawn%s (%u indoors); grid %u x %u cells of %.0f yd, busiest cell %u lights, %u cells over their limit; "
-                      "stock terrain lights %s",
+                      "stock terrain lights %s\n"
+                      "shadows: %u lights with a map (of %u slots), %u waiting; %u maps drawn this frame (%u triangles)",
                       s_stats.models, s_stats.model_lights, s_stats.placed, s_stats.suppressed, s_stats.table_lights, s_stats.attach_missing,
                       s_stats.in_range, s_stats.merged, s_stats.active, s_stats.dropped ? " (the farthest left out: more than 512)" : "", s_stats.indoor, s_stats.cells,
-                      s_stats.cells, s_frame.cellSize, s_stats.busiest_cell, s_stats.full_cells, StockTerrainOff() ? "off" : "on");
+                      s_stats.cells, s_frame.cellSize, s_stats.busiest_cell, s_stats.full_cells, StockTerrainOff() ? "off" : "on", s_stats.shadowed,
+                      s_stats.shadow_slots, s_stats.shadow_waiting, s_stats.shadow_draws, s_stats.shadow_triangles);
         return s_status;
     }
 
@@ -758,6 +1176,7 @@ namespace SXC::Lights {
         s_found.clear();
         s_lights.clear();
         s_strength.clear();
+        s_lightFound.clear();
         const CM2Scene* scene = World::s_m2Scene;
 
         if (!Settled() || !scene) {
@@ -834,9 +1253,11 @@ namespace SXC::Lights {
 
             s_lights.push_back(l);
             s_strength.push_back((f.color.x + f.color.y + f.color.z) * set.brightness);
+            s_lightFound.push_back(o.second);
         }
 
         s_stats.active = static_cast<uint32_t>(s_lights.size());
+        AssignShadows(nowMs);
         BuildGrid(camera, range, cell, perCell);
 
         // The view back to the world (row vectors: world = view x the view's inverse), a row per world axis.
@@ -849,6 +1270,22 @@ namespace SXC::Lights {
         s_frame.lightCount = static_cast<uint32_t>(s_lights.size());
         s_frame.lights = s_lights.empty() ? nullptr : s_lights.data();
         s_frame.cellLights = s_cellLights.data();
+        s_frame.shadowJobs = s_shadowJobs.empty() ? nullptr : s_shadowJobs.data();
+        s_frame.shadowJobCount = static_cast<uint32_t>(s_shadowJobs.size());
         return s_frame;
+    }
+
+    void SetShadowDevice(uint32_t slots, uint32_t maxVertices) {
+        s_shadowSlotCount = slots;
+        s_shadowMaxVertices = maxVertices;
+        s_shadowSlots.clear();   // a new device: nothing drawn
+    }
+
+    void ShadowsDrawn(uint32_t drawn) {
+        for (size_t j = drawn; j < s_shadowJobSlots.size(); j++) {
+            if (s_shadowJobSlots[j] < s_shadowSlots.size()) {
+                s_shadowSlots[s_shadowJobSlots[j]].valid = false;
+            }
+        }
     }
 }

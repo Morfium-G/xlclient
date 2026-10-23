@@ -24,8 +24,9 @@ namespace SXC::Lights {
         float spotDir[3];    // world, unit: where a spot points
         float cosOuter;      // spot: cos of the outer angle; -2 a point light (always inside)
         float spotScale;     // 1 / (cos inner - cos outer)
-        float flags;         // reserved (indoor, occlusion: 6c, 6d)
-        float pad[2];
+        float flags;         // kLightIndoor
+        float shadow;        // its shadow map's slot + 1; 0 none
+        float pad;
     };
     static_assert(sizeof(GpuLight) == 64, "the shaders read a light as four vec4");
     constexpr float kLightIndoor = 1.0f;   // GpuLight::flags: inside an indoor WMO group
@@ -36,6 +37,15 @@ namespace SXC::Lights {
         kSurfaceOutdoor = 1,  // the terrain, outdoor WMO groups: the lights outside
         kSurfaceIndoor = 2,   // indoor WMO groups: the lights inside
         kSurfaceOff = 3,      // another scene than the world's: none
+    };
+
+    // A light's cube shadow map to draw this frame (the device's Vulkan/Shadows): triangles, three
+    // vertices each, xyz relative to the light, out to its radius.
+    struct ShadowJob {
+        uint32_t slot;
+        float radius;
+        const float* vertices;
+        uint32_t vertexCount;
     };
 
     // What the device reads per frame (pointers valid until the next Current()).
@@ -50,11 +60,19 @@ namespace SXC::Lights {
         const GpuLight* lights = nullptr;
         const uint32_t* cellLights = nullptr; // cell (x, y) at [(y * cells + x) * perCell ..]: light indices, kNoLight ends a list
         float viewInv[12] = {};               // the world scene's view back to the world: rows x, y, z (w the translation)
+        const ShadowJob* shadowJobs = nullptr;
+        uint32_t shadowJobCount = 0;
     };
 
     // The device's side: whether it draws our lights, its one-line status.
     using StatusFn = const char* (*)();
     void SetDevice(bool available, StatusFn status);
+
+    // The device's shadow maps: how many lights, and how many vertices one frame's maps may hold (0: none).
+    void SetShadowDevice(uint32_t slots, uint32_t maxVertices);
+
+    // How many of this frame's shadow jobs the device drew (the first ones); the others' slots are redrawn later.
+    void ShadowsDrawn(uint32_t drawn);
 
     // This frame's lights, gathered now. Main thread, once per frame (the device's first terrain draw).
     const Frame& Current();

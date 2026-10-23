@@ -37,6 +37,10 @@ OUTPUTS = [
         ("Fog.comp", "kFogComp"),
         ("Fog.frag", "kFogFrag"),
     ]),
+    # SXC: the lights' cube shadow maps (Vulkan/Shadows.cpp), depth only.
+    ("ShadowSpirv.inc", [
+        ("LightShadow.vert", "kLightShadowVert"),
+    ]),
     # SXC: our terrain shader (Vulkan/Pipelines/Terrain.cpp): one vertex module; the pixel source once
     # per layer count and shadow group (the samplers a module declares must all be bound), the finer
     # options as specialization constants. Twice: the cover textures in 16 slots (any device), and in
