@@ -265,6 +265,23 @@ namespace
                     a.format   = k.attribs[attrib].format;
                     a.offset   = k.attribs[attrib].offset;
                 }
+                // SXC: the instanced grass variant reads a plant's rows (step 7).
+                if (r->grass)
+                {
+                    if (!k.plantStream)
+                    {
+                        why = "the grass variant needs the plant rows' stream";
+                        return false;
+                    }
+                    for (uint32_t row = 0; row < 3; ++row)
+                    {
+                        VkVertexInputAttributeDescription& a = in.attrs[in.count++];
+                        a.location = 13 + row;
+                        a.binding  = k.plantStream - 1;
+                        a.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+                        a.offset   = 16 * row;
+                    }
+                }
                 return true;
             }
 
@@ -443,7 +460,7 @@ namespace
         {
             bindings[bindingCount].binding   = i;
             bindings[bindingCount].stride    = k.stride[i];
-            bindings[bindingCount].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            bindings[bindingCount].inputRate = (k.instanceStreams & (1u << i)) ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX;  // SXC: grass
             ++bindingCount;
         }
         if (in.needConst)

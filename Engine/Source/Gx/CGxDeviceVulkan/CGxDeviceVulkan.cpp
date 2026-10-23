@@ -11,6 +11,8 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Fog.hpp"  // SXC: volumetric fog
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Grass.hpp"  // SXC: the instanced grass
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Manifest.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Manifest.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
@@ -26,6 +28,7 @@
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 #include "SXC/Cover/Cover.h"  // SXC: surface covers
 #include "SXC/Lights/Lights.h" // SXC: point lights
+#include "SXC/Log.h"
 
 namespace context   = gxvk::vk::context;
 namespace frame     = gxvk::vk::frame;
@@ -258,7 +261,70 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         gxvk::vk::lights::SetShadowReport(&SXC::Lights::ShadowsDrawn);
         SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
         SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
+
+        // SXC: the instanced grass.
+        static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
+                                                    &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
+        SXC::Grass::SetDevice(gxvk::vk::grass::Init() ? &s_grass : nullptr);
     }
+}
+
+// SXC: the instanced grass (SXC/Grass): a texture's runs with the client's grass state as it stands --
+// the DetailDoodad shaders and constants CDetailDoodad set, the texture at stage 0 -- but the vertex
+// module's instanced variant (manifest `instanced`), the plant models' buffers and the plant pool fed
+// per instance (rows at locations 13..15, the normal and colour as the stock vertex's).
+bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs, uint32_t count) {
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+
+    if (!device || !device->m_context || device->m_intF5C || !device->m_drawPath || !texture || !runs || !count || !gxvk::vk::grass::Ready()) {
+        return false;
+    }
+
+    device->RsSet(GxRs_Texture0, texture);
+    device->IRsSync(0);
+
+    if (!gxvk::vk::frame::Pass()) {
+        return false;
+    }
+
+    gxvk::vk::pipelines::Draw d;
+    d.streamCount = 2;
+    d.streams[0] = { gxvk::vk::grass::MeshVertices(), 0, gxvk::vk::grass::kVertexBytes };
+    d.streams[1] = { gxvk::vk::grass::Plants(), 0, gxvk::vk::grass::kPlantBytes };
+    d.attribs[GxVA_Position] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT };
+    d.attribs[GxVA_TexCoord0] = { 0, 12, VK_FORMAT_R32G32_SFLOAT };
+    d.attribs[GxVA_Normal] = { 1, 48, VK_FORMAT_R32G32B32_SFLOAT };
+    d.attribs[GxVA_Color0] = { 1, 60, VK_FORMAT_B8G8R8A8_UNORM };
+    d.attribMask = (1u << GxVA_Position) | (1u << GxVA_TexCoord0) | (1u << GxVA_Normal) | (1u << GxVA_Color0);
+    d.instanceStreams = 1u << 1;
+    d.plantStream = 1;
+    d.indexed = true;
+    d.indexBuffer = gxvk::vk::grass::MeshIndices();
+    d.topology = GxPrim_Triangles;
+    d.count = 1;
+
+    if (!device->IDrawState(d)) {
+        return false;
+    }
+
+    // The bound DetailDoodad vertex record's instanced variant; without one the stock way is all there is.
+    const gxvk::vk::manifest::Record* instanced = d.vertex == gxvk::vk::pipelines::VertexProgram::Translated && d.vertexRecord
+                                                      ? gxvk::vk::manifest::Instanced(*d.vertexRecord)
+                                                      : nullptr;
+
+    if (!instanced) {
+        SXC::LogOnce("grass-no-variant", "grass: the bound grass vertex shader has no instanced variant (re-run the shader translator)");
+        return false;
+    }
+
+    d.vertexRecord = instanced;
+    static_assert(sizeof(SXC::Grass::Run) == sizeof(gxvk::vk::pipelines::Run), "SXC::Grass::Run is the pipelines' Run");
+    d.runs = reinterpret_cast<const gxvk::vk::pipelines::Run*>(runs);
+    d.runCount = count;
+
+    VkCommandBuffer cmd = gxvk::vk::frame::Pass();
+    return cmd && gxvk::vk::pipelines::Record(cmd, gxvk::vk::frame::RenderPass(), gxvk::vk::frame::PassGeneration(), gxvk::vk::frame::Serial(),
+                                              gxvk::vk::frame::Slot(), d);
 }
 
 // SXC: our point lights, gathered once per frame at its first terrain draw (SXC/Lights).
@@ -525,10 +591,12 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     this->ICursorDestroy();
     SXC::Fog::SetRenderer(nullptr, nullptr);  // SXC: volumetric fog
     SXC::Cover::SetDevice(false, 0, nullptr); // SXC: surface covers
+    SXC::Grass::SetDevice(nullptr);           // SXC: the instanced grass (its buffers go below)
     frame::ReleaseSwapchain();
     this->IReleasePools();
     this->IReleaseTextures();
     gxvk::vk::fog::Shutdown();  // SXC: the device is idle (ReleaseSwapchain waited)
+    gxvk::vk::grass::Shutdown();
     frame::Destroy();
     pipelines::Shutdown();
     present::Shutdown();

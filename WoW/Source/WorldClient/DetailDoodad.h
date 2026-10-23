@@ -124,6 +124,10 @@ class CDetailDoodadInst {
     void Free();
 };
 
+// SXC: the instanced grass (SXC/Grass): a batch's plants as FillVertices places them, 16 floats each
+// (the placement's three rows with `origin` added, the normal, the colour's bytes).
+void SxcGrassPlants(CDetailDoodadInstBatch& batch, const C3Vector& origin, float* out);
+
 // INLINED
 inline CDetailDoodadInstAdd::CDetailDoodadInstAdd() {
 }

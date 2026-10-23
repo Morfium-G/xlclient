@@ -154,7 +154,8 @@ namespace gxvk::vk::pipelines
             ++s.stats.skipped;
             return false;
         }
-        if (draw.streamCount == 0 || draw.streamCount > kMaxStreams || !(draw.attribMask & (1u << kAttribPosition)) || draw.count == 0)
+        if (draw.streamCount == 0 || draw.streamCount > kMaxStreams || !(draw.attribMask & (1u << kAttribPosition)) || (draw.count == 0 && draw.runCount == 0)
+            || (draw.runs && !draw.indexed))
         {
             ++s.stats.skipped;
             return false;
@@ -218,6 +219,8 @@ namespace gxvk::vk::pipelines
         k.layoutIndex    = layoutIndex;
         k.terrainVertex   = draw.vertex == VertexProgram::Terrain ? draw.terrainVertex : 0u;      // SXC:
         k.terrainFragment = draw.fragment == FragmentProgram::Terrain ? draw.terrainFragment : 0u;
+        k.instanceStreams = draw.instanceStreams;   // SXC: the instanced grass
+        k.plantStream     = draw.plantStream >= 0 ? static_cast<uint32_t>(draw.plantStream) + 1u : 0u;
 
         const Entry* entry = Lookup(k);
         if (!entry || entry->pipeline == VK_NULL_HANDLE)
@@ -391,7 +394,18 @@ namespace gxvk::vk::pipelines
                 d.CmdBindIndexBuffer(cmd, draw.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
                 b.ib = draw.indexBuffer;
             }
-            d.CmdDrawIndexed(cmd, draw.count, 1, draw.firstIndex, 0, 0);
+            if (draw.runs)
+            {
+                // SXC: the instanced grass's runs, one bind for all of them.
+                for (uint32_t r = 0; r < draw.runCount; ++r)
+                {
+                    const Run& run = draw.runs[r];
+                    if (run.indexCount && run.instanceCount)
+                        d.CmdDrawIndexed(cmd, run.indexCount, run.instanceCount, run.firstIndex, run.vertexOffset, run.firstInstance);
+                }
+            }
+            else
+                d.CmdDrawIndexed(cmd, draw.count, 1, draw.firstIndex, 0, 0);
         }
         else
         {

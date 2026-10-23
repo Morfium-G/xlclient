@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "SXC/Data/Data.h"
+#include "SXC/Grass/Grass.h"
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
@@ -143,6 +144,16 @@ namespace {
         const ImGuiIO& io = ImGui::GetIO();
         ImGui::Text("%.1f fps, %.2f ms", io.Framerate, io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
         ImGui::PlotLines("##frametimes", s_frameTimes, IM_ARRAYSIZE(s_frameTimes), s_frameTimeAt, "frame time (ms)", 0.0f, 50.0f, ImVec2(-FLT_MIN, 80.0f));
+
+        // SXC: the instanced grass, switchable here to compare.
+        bool grass = SXC::Grass::Enabled();
+
+        if (ImGui::Checkbox("Instanced grass", &grass)) {
+            SXC::Grass::SetEnabled(grass);
+        }
+
+        ImGui::SetItemTooltip("The ground-effect plants drawn instanced on the GPU (Vulkan) instead of re-baked on the CPU every frame. [Grass] Instanced");
+        ImGui::TextWrapped("Grass: %s", SXC::Grass::Status());
         ImGui::TextDisabled("Overlay: Dear ImGui %s (docking)", ImGui::GetVersion());
     }
 

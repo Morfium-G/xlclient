@@ -100,6 +100,7 @@
 #include "WoW/Source/Object/ObjectClient/Object_C.h"
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
 #include "WarcraftXL/Seams.h"
+#include "SXC/Grass/Grass.h"  // SXC: the instanced grass
 
 // STATIC: 0x00ADEE48
 static const char* s_zonePaths[11] = {
@@ -3541,6 +3542,7 @@ void CWorldScene::RenderDetailDoodads() {
 
     int32_t shaders = CDetailDoodad::InitializeRenderState();
     C44Matrix world;
+    SXC::Grass::Begin();  // SXC: the instanced grass takes the chunks it can, and draws them at the end
 
     CDetailDoodadInst* next;
 
@@ -3548,6 +3550,13 @@ void CWorldScene::RenderDetailDoodads() {
         next = CWorldScene::sortTable.m_detailDoodadInstList.Next(inst);
         CMapChunk* chunk = inst->m_chunk;
         inst->m_age = 0;
+
+        // SXC: instanced: no lights to select, no bake, no draw of its own here.
+        if (SXC::Grass::Take(inst)) {
+            inst->m_link.Unlink();
+            CMap::s_detailDoodadUpdateList.LinkToTail(inst);
+            continue;
+        }
 
         CM2Lighting lighting(chunk->m_sphere);
         World::s_m2Scene->SelectLights(&lighting);
@@ -3572,6 +3581,8 @@ void CWorldScene::RenderDetailDoodads() {
         inst->m_link.Unlink();
         CMap::s_detailDoodadUpdateList.LinkToTail(inst);
     }
+
+    SXC::Grass::End();  // SXC:
 
     GxXformPop(GxXform_Tex1);
     GxXformPop(GxXform_World);

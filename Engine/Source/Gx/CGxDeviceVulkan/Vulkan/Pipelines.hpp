@@ -125,6 +125,17 @@ namespace gxvk::vk::pipelines
         bool        cube       = false;
     };
 
+    /// SXC: one instanced draw of a run list (the instanced grass, step 7): indices of the bound index
+    /// buffer, instances of the instance-rate streams.
+    struct Run
+    {
+        uint32_t firstIndex    = 0;
+        uint32_t indexCount    = 0;
+        int32_t  vertexOffset  = 0;
+        uint32_t firstInstance = 0;
+        uint32_t instanceCount = 0;
+    };
+
     /// One draw, as the device reads it off the engine.
     struct Draw
     {
@@ -191,6 +202,14 @@ namespace gxvk::vk::pipelines
 
         VkViewport viewport = {};
         VkRect2D   scissor  = {};
+
+        /// SXC: the instanced grass (step 7): the streams fed per instance (bit per stream), the stream
+        /// whose first 48 bytes are a plant's rows (a grass vertex record reads them at locations
+        /// 13..15; -1 none), and the runs recorded instead of the one draw (indexed; `count` ignored).
+        uint32_t   instanceStreams = 0;
+        int32_t    plantStream     = -1;
+        const Run* runs     = nullptr;
+        uint32_t   runCount = 0;
     };
 
     /**

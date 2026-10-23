@@ -176,65 +176,9 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
 
     d.count = batch->m_count;
     d.topology = batch->m_primType;
-    d.blend = this->m_appRenderStates[GxRs_BlendingMode].m_value.m_data.i[0];
-    this->IRenderStates(d);
-
-    // The constant registers, then the programs (which read them for their transform) and the
-    // texture stages they sample.
-    this->IShaderConstantsFlush();
-    const uint32_t samplerMask = this->IShaderPrograms(d);
-
-    for (uint32_t stage = 0; stage < pipelines::kTextureStages; stage++) {
-        if (samplerMask & (1u << stage)) {
-            this->ITexResolve(static_cast<CGxTex*>(this->m_appRenderStates[GxRs_Texture0 + stage].m_value.m_data.p), stage, d);
-        }
-    }
-
-    // The alpha test, the textured stages and the ops of stages 0 and 1 (Shaders/Push.glsl's
-    // params: stage 1's ops in bits 3..5), the stage-0 ops alone in the translated interface's misc
-    // row, and the stages' texture transforms.
-    const int32_t alphaRef = this->m_appRenderStates[GxRs_AlphaRef].m_value.m_data.i[0];
-    const uint32_t colourOp0 = this->m_appRenderStates[GxRs_ColorOp0].m_value.m_data.u[0] & 7u;
-    const uint32_t alphaOp0 = this->m_appRenderStates[GxRs_AlphaOp0].m_value.m_data.u[0] & 7u;
-    const uint32_t colourOp1 = this->m_appRenderStates[GxRs_ColorOp1].m_value.m_data.u[0] & 7u;
-    const uint32_t alphaOp1 = this->m_appRenderStates[GxRs_AlphaOp1].m_value.m_data.u[0] & 7u;
-    d.params[0] = alphaRef > 0 ? static_cast<float>(alphaRef) : 0.0f;
-    d.params[1] = static_cast<float>(d.textureMask & 3u);
-    d.params[2] = static_cast<float>(colourOp0 | (colourOp1 << 3));
-    d.params[3] = static_cast<float>(alphaOp0 | (alphaOp1 << 3));
-    d.misc[0] = d.params[0] / 255.0f;
-    d.misc[1] = 0.0f;
-    d.misc[2] = static_cast<float>(colourOp0);
-    d.misc[3] = static_cast<float>(alphaOp0);
-    this->ITexTransforms(d);
-
-    // The register files of a translated draw. Pixel row 15, which no shipped pixel shader reads,
-    // carries the fixed-function fog colour and enable for the generated companion stages: the
-    // engine's GxRs_FogColor is a D3DCOLOR (0xAARRGGBB), GxRs_Fog under the fog master enable.
-    float pixelRows[pipelines::kPixelRows * 4];
-    memcpy(pixelRows, this->m_pixelRegs, sizeof(pixelRows));
-    const uint32_t fogColour = this->m_appRenderStates[GxRs_FogColor].m_value.m_data.u[0];
-    const bool fogOn = this->m_appRenderStates[GxRs_Fog].m_value.m_data.i[0] != 0 && (this->m_appMasterEnables & (1 << GxMasterEnable_Fog)) != 0;
-    pixelRows[15 * 4 + 0] = ((fogColour >> 16) & 0xFF) / 255.0f;
-    pixelRows[15 * 4 + 1] = ((fogColour >> 8) & 0xFF) / 255.0f;
-    pixelRows[15 * 4 + 2] = (fogColour & 0xFF) / 255.0f;
-    pixelRows[15 * 4 + 3] = fogOn ? 1.0f : 0.0f;
-    // SXC: the same fog for the fixed-function programs (Shaders/Push.glsl's fog), which D3D9 applies
-    // as linear vertex fog (D3DRS_FOGVERTEXMODE LINEAR): the horizon's terrain and map objects rely on
-    // it to turn into the fog colour.
-    d.fog[0] = this->m_appRenderStates[GxRs_FogStart].m_value.m_data.f[0];
-    d.fog[1] = this->m_appRenderStates[GxRs_FogEnd].m_value.m_data.f[0];
-    d.fog[2] = static_cast<float>(fogColour & 0xFFFFFFu);
-    d.fog[3] = fogOn ? 1.0f : 0.0f;
-    d.pixelRegs = pixelRows;
-    d.vertexRegs = this->m_vertexRegs;
-
-    if (!this->IPlaceD3d(d.viewport, d.scissor)) {
+    if (!this->IDrawState(d)) {
         return;
     }
-
-    d.viewport.x += kD3d9CentreShift;
-    d.viewport.y += kD3d9CentreShift;
 
     // SXC: a projected texture's box, shaded onto the raised covers (step 5e).
     const SXC::Cover::Decal* decal = SXC::Cover::CurrentDecal();
@@ -274,6 +218,72 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
     if (indexBuf) {
         this->INoteBufDrawn(indexBuf);
     }
+}
+
+// The engine's state of a draw, as Draw() reads it after the vertex streams: blend, render states, the
+// constants and programs, the texture stages, the alpha test and stage ops, the texture transforms,
+// the register files, the fog, the D3D placement. SXC: shared with the instanced grass (SxcGrassDraw).
+bool CGxDeviceVulkan::IDrawState(pipelines::Draw& d) {
+    d.blend = this->m_appRenderStates[GxRs_BlendingMode].m_value.m_data.i[0];
+    this->IRenderStates(d);
+
+    // The constant registers, then the programs (which read them for their transform) and the
+    // texture stages they sample.
+    this->IShaderConstantsFlush();
+    const uint32_t samplerMask = this->IShaderPrograms(d);
+
+    for (uint32_t stage = 0; stage < pipelines::kTextureStages; stage++) {
+        if (samplerMask & (1u << stage)) {
+            this->ITexResolve(static_cast<CGxTex*>(this->m_appRenderStates[GxRs_Texture0 + stage].m_value.m_data.p), stage, d);
+        }
+    }
+
+    // The alpha test, the textured stages and the ops of stages 0 and 1 (Shaders/Push.glsl's
+    // params: stage 1's ops in bits 3..5), the stage-0 ops alone in the translated interface's misc
+    // row, and the stages' texture transforms.
+    const int32_t alphaRef = this->m_appRenderStates[GxRs_AlphaRef].m_value.m_data.i[0];
+    const uint32_t colourOp0 = this->m_appRenderStates[GxRs_ColorOp0].m_value.m_data.u[0] & 7u;
+    const uint32_t alphaOp0 = this->m_appRenderStates[GxRs_AlphaOp0].m_value.m_data.u[0] & 7u;
+    const uint32_t colourOp1 = this->m_appRenderStates[GxRs_ColorOp1].m_value.m_data.u[0] & 7u;
+    const uint32_t alphaOp1 = this->m_appRenderStates[GxRs_AlphaOp1].m_value.m_data.u[0] & 7u;
+    d.params[0] = alphaRef > 0 ? static_cast<float>(alphaRef) : 0.0f;
+    d.params[1] = static_cast<float>(d.textureMask & 3u);
+    d.params[2] = static_cast<float>(colourOp0 | (colourOp1 << 3));
+    d.params[3] = static_cast<float>(alphaOp0 | (alphaOp1 << 3));
+    d.misc[0] = d.params[0] / 255.0f;
+    d.misc[1] = 0.0f;
+    d.misc[2] = static_cast<float>(colourOp0);
+    d.misc[3] = static_cast<float>(alphaOp0);
+    this->ITexTransforms(d);
+
+    // The register files of a translated draw. Pixel row 15, which no shipped pixel shader reads,
+    // carries the fixed-function fog colour and enable for the generated companion stages: the
+    // engine's GxRs_FogColor is a D3DCOLOR (0xAARRGGBB), GxRs_Fog under the fog master enable.
+    float* pixelRows = this->m_sxcPixelRows;
+    memcpy(pixelRows, this->m_pixelRegs, sizeof(this->m_sxcPixelRows));
+    const uint32_t fogColour = this->m_appRenderStates[GxRs_FogColor].m_value.m_data.u[0];
+    const bool fogOn = this->m_appRenderStates[GxRs_Fog].m_value.m_data.i[0] != 0 && (this->m_appMasterEnables & (1 << GxMasterEnable_Fog)) != 0;
+    pixelRows[15 * 4 + 0] = ((fogColour >> 16) & 0xFF) / 255.0f;
+    pixelRows[15 * 4 + 1] = ((fogColour >> 8) & 0xFF) / 255.0f;
+    pixelRows[15 * 4 + 2] = (fogColour & 0xFF) / 255.0f;
+    pixelRows[15 * 4 + 3] = fogOn ? 1.0f : 0.0f;
+    // SXC: the same fog for the fixed-function programs (Shaders/Push.glsl's fog), which D3D9 applies
+    // as linear vertex fog (D3DRS_FOGVERTEXMODE LINEAR): the horizon's terrain and map objects rely on
+    // it to turn into the fog colour.
+    d.fog[0] = this->m_appRenderStates[GxRs_FogStart].m_value.m_data.f[0];
+    d.fog[1] = this->m_appRenderStates[GxRs_FogEnd].m_value.m_data.f[0];
+    d.fog[2] = static_cast<float>(fogColour & 0xFFFFFFu);
+    d.fog[3] = fogOn ? 1.0f : 0.0f;
+    d.pixelRegs = pixelRows;
+    d.vertexRegs = this->m_vertexRegs;
+
+    if (!this->IPlaceD3d(d.viewport, d.scissor)) {
+        return false;
+    }
+
+    d.viewport.x += kD3d9CentreShift;
+    d.viewport.y += kD3d9CentreShift;
+    return true;
 }
 
 // The texture transforms of stages 0 and 1 as CGxDeviceD3d::IXformSetTex (0x006A5AA0) sets them for

@@ -31,6 +31,7 @@
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
 #include "SXC/Log.h"  // SXC:
+#include "SXC/Grass/Grass.h"  // SXC:
 
 // STATIC: 0x00D1C4C4
 static uint32_t s_indexBufferSize;
@@ -436,6 +437,84 @@ void CDetailDoodadInstBatch::FillVertices() {
     buf->m_hasData = 1;
 }
 
+// SXC: the instanced grass (SXC/Grass): each plant of a batch as FillVertices places it, one record of 16
+// floats per add: the placement's rows (model space -> world, `origin` added: the stock bake's chunk
+// space plus the chunk's corner), the normal, the colour's four bytes. The same math in the same order,
+// so the plants land exactly where the stock bake puts their vertices (the terrain-aligned plants of a
+// cell's fan share the first one's matrix, as stock does).
+void SxcGrassPlants(CDetailDoodadInstBatch& batch, const C3Vector& origin, float* out) {
+    C3Vector axis(0.0f, 0.0f, 1.0f);
+    C33Matrix basis(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    uint8_t built = 0;
+    uint32_t cell = 0xFFFF;
+    C33Matrix rotation(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    C33Matrix matrices[4] = {
+        C33Matrix(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f),
+        C33Matrix(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f),
+        C33Matrix(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f),
+        C33Matrix(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f)
+    };
+
+    for (uint32_t i = 0; i < batch.m_adds.Count(); i++, out += 16) {
+        CDetailDoodadInstAdd& add = batch.m_adds[i];
+        const CDetailDoodadData* data = CDetailDoodad::s_doodadList[add.m_doodadId];
+        CImVector color = add.m_color;
+
+        if (!CDetailDoodad::s_bUseShaders) {
+            uint32_t scale = 76 * color.a + 45874;
+            color.r = static_cast<uint8_t>((scale * color.r) >> 16);
+            color.g = static_cast<uint8_t>((scale * color.g) >> 16);
+            color.b = static_cast<uint8_t>((scale * color.b) >> 16);
+            color.a = 0xFF;
+        }
+
+        if (g_theGxDevicePtr->Caps().m_colorFormat == GxCF_rgba) {
+            CImVector swapped;
+            swapped.a = color.a;
+            swapped.g = color.g;
+            swapped.r = color.b;
+            swapped.b = color.r;
+            color = swapped;
+        }
+
+        const float px = add.m_position.x + origin.x, py = add.m_position.y + origin.y, pz = add.m_position.z + origin.z;
+        const float sc = add.m_scale;
+
+        if (data && (data->m_record->m_flags & 1)) {
+            if ((add.m_triIndex & 0xFC) != cell) {
+                cell = add.m_triIndex & 0xFC;
+                built = 0;
+            }
+
+            uint32_t fan = add.m_triIndex & 3;
+
+            if (!(built & (1 << fan))) {
+                const C3Vector& normal = add.m_normal;
+                float inv = 1.0f / sqrt(-normal.y * -normal.y + normal.z * normal.z);
+                C3Vector tangent(0.0f * inv, normal.z * inv, -normal.y * inv);
+                C3Vector binormal(normal.y * tangent.z - normal.z * tangent.y, normal.z * tangent.x - tangent.z * normal.x, tangent.y * normal.x - tangent.x * normal.y);
+                basis = C33Matrix(binormal.x, binormal.y, binormal.z, tangent.x, tangent.y, tangent.z, normal.x, normal.y, normal.z);
+                BuildInstanceMatrix(matrices[fan], rotation, basis, add.m_rotation, axis);
+                built |= 1 << fan;
+            }
+
+            // position = source * matrix (a row vector): x = sx a0 + sy b0 + sz c0, and so on.
+            const C33Matrix& m = matrices[fan];
+            const float rows[12] = { m.a0 * sc, m.b0 * sc, m.c0 * sc, px, m.a1 * sc, m.b1 * sc, m.c1 * sc, py, m.a2 * sc, m.b2 * sc, m.c2 * sc, pz };
+            memcpy(out, rows, sizeof(rows));
+        } else {
+            const float c = cos(add.m_rotation), s = sin(add.m_rotation);
+            const float rows[12] = { c * sc, -s * sc, 0.0f, px, s * sc, c * sc, 0.0f, py, 0.0f, 0.0f, sc, pz };
+            memcpy(out, rows, sizeof(rows));
+        }
+
+        out[12] = add.m_normal.x;
+        out[13] = add.m_normal.y;
+        out[14] = add.m_normal.z;
+        memcpy(&out[15], &color, sizeof(color));
+    }
+}
+
 // VERIFY: a2c3ec0e manual
 // OFFSET: 0x007B1380
 void CDetailDoodad::DestroyModels() {
@@ -811,6 +890,8 @@ int32_t CDetailDoodad::LoadModel(uint32_t id) {
 // VERIFY: f62a81be manual
 // OFFSET: 0x007B3560
 void CDetailDoodadInst::Free() {
+    SXC::Grass::Forget(this);  // SXC: its instanced plants go back to the pool
+
     if (this->m_chunk) {
         this->m_chunk->m_detailDoodadInst = nullptr;
         this->m_chunk = nullptr;
