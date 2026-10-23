@@ -11,7 +11,8 @@
 // shadow), s5..s8 the shadow cascades. Pixel registers: p1 the layers' lighting (0 = unlit), p2 the fog
 // colour, p3..p10 the shadow taps' offsets. The math follows the stock records operation by operation
 // (5a: the stock look, unchanged); the covers (5b, TerrainCover.glsl) change the layers' colour and
-// gloss before the light, and add a wet shine, only while a mod turns them on.
+// gloss before the light, and add a wet shine, only while a mod turns them on; our point lights (6a,
+// Lights.glsl) join the diffuse light, only while a mod turns them on.
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #if COVER_BINDLESS
@@ -70,6 +71,7 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 } regs;
 
 #include "TerrainCover.glsl"
+#include "Lights.glsl"
 
 // Coordinate k (the vertex shader's packing): one per varying, or two per varying with the cascades.
 vec2 Coord(int k)
@@ -120,7 +122,24 @@ float Taps(sampler2D map, vec2 coord, float depth, bool nine)
 
 void main()
 {
-    vec3 twice = color0.xyz + color0.xyz;
+    // SXC: our point lights (step 6a) in the stock diffuse light. color0 is the stock light (clamped)
+    // x the vertex colour's factor, so twice it is the light the layers get; the lamps join that light
+    // (LightsCombine), and the factor stays: color0 x combined / stock.
+    vec4 lit0 = color0;
+    vec3 lamps = vec3(0.0);
+    int lampCount = 0;
+
+    if (LightsOn())
+    {
+        // The normal back to world orientation (v0..v2: world x view, a rotation).
+        vec3 nv = normalize(coverNormal.xyz);
+        vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
+        lamps = LightsAt(coverWorld.xyz, n, lampCount);
+        vec3 stock = min(color0.xyz + color0.xyz, vec3(1.0));
+        lit0.xyz = color0.xyz * LightsCombine(stock, lamps) / max(stock, vec3(1e-4));
+    }
+
+    vec3 twice = lit0.xyz + lit0.xyz;
     vec4 alpha = texture(sAlpha, Coord(LAYERS));
     vec4 c = Layer(texture(s0, Coord(0)), regs.p[1].x, twice);
 
@@ -225,7 +244,7 @@ void main()
     else
     {
         colour = c.xyz * shade;
-        colour = colour * color0.xyz;
+        colour = colour * lit0.xyz;
         colour = colour + colour;
         vec3 highlight = c.www * color1.xyz + shine;
         colour = highlight * shadow + colour;
@@ -235,6 +254,29 @@ void main()
     if (cover.enable.x > 0.5 && cover.enable.y > 0.5 && cover.enable.y < 6.5)
     {
         oC0 = vec4(CoverDebug(cov, int(cover.enable.y + 0.5)), 1.0);
+        return;
+    }
+
+    // SXC: the lights' debug views (unfogged): 1 our lights alone on grey ground, 2 how full the pixel's
+    // cell is (red: lights reaching this pixel, green: lights the cell lists, both of what it holds).
+    if (LightsOn() && LightsDebug() == 1)
+    {
+        oC0 = vec4(vec3(0.15) + lamps, 1.0);
+        return;
+    }
+
+    if (LightsOn() && LightsDebug() == 2)
+    {
+        int first = LightCellFirst(coverWorld.xy);
+        int perCell = int(lightInfo.x + 0.5);
+        int listed = 0;
+
+        for (int k = 0; k < kMaxLightsPerCell && k < perCell && cellLights[first + k] != 0xFFFFFFFFu; k++)
+        {
+            listed++;
+        }
+
+        oC0 = vec4(float(lampCount) / float(max(perCell, 1)), float(listed) / float(max(perCell, 1)), 0.1, 1.0);
         return;
     }
 

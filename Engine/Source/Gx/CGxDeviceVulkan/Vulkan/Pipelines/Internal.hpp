@@ -157,6 +157,7 @@ namespace gxvk::vk::pipelines::detail
         VkDescriptorSet  set0     = VK_NULL_HANDLE;
         VkDescriptorSet  set1     = VK_NULL_HANDLE;
         VkDescriptorSet  set2     = VK_NULL_HANDLE;   ///< SXC: the covers' (our terrain shader)
+        VkDescriptorSet  set3     = VK_NULL_HANDLE;   ///< SXC: the lights' (our terrain shader)
         uint32_t         offset1  = 0;
         bool             have1    = false;
         VkBuffer         vbs[kMaxStreams + 1]     = {};
@@ -185,7 +186,7 @@ namespace gxvk::vk::pipelines::detail
     struct LayoutEntry
     {
         uint32_t              mask   = 0;
-        bool                  cover  = false;   ///< SXC: set 2 is Vulkan/Cover's
+        bool                  cover  = false;   ///< SXC: set 2 is Vulkan/Cover's, set 3 Vulkan/Lights'
 
         VkDescriptorSetLayout set0   = VK_NULL_HANDLE;
         VkPipelineLayout      layout = VK_NULL_HANDLE;

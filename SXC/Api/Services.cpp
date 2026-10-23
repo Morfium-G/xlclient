@@ -8,6 +8,7 @@
 #include "SXC/Api/sxc_world.h"
 #include "SXC/Api/sxc_fog.h"
 #include "SXC/Api/sxc_cover.h"
+#include "SXC/Api/sxc_lights.h"
 
 #include <cstring>
 #include <memory>
@@ -32,6 +33,10 @@ namespace SXC::Fog {
 
 namespace SXC::Cover {
     const sxc_cover_api* Api();
+}
+
+namespace SXC::Lights {
+    const sxc_lights_api* Api();
 }
 
 namespace {
@@ -395,6 +400,10 @@ extern "C" __declspec(dllexport) const void* WXL_CALL sxc_get_service(const char
 
     if (strcmp(name, SXC_COVER_SERVICE) == 0 && version == SXC_COVER_SERVICE_VERSION) {
         return SXC::Cover::Api();
+    }
+
+    if (strcmp(name, SXC_LIGHTS_SERVICE) == 0 && version == SXC_LIGHTS_SERVICE_VERSION) {
+        return SXC::Lights::Api();
     }
 
     return nullptr;

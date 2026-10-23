@@ -1,9 +1,10 @@
 // The descriptor set layouts and the pipeline layouts: set 0 is one combined image sampler per
 // declared sampler slot (one layout per distinct slot set), set 1 the translated interface's
 // dynamic uniform buffer; every pipeline layout is {set 0, set 1} plus the push range (SXC: our terrain
-// shader's {set 0, set 1, the covers' set 2}).
+// shader's {set 0, set 1, the covers' set 2, the lights' set 3}).
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
 namespace gxvk::vk::pipelines::detail
@@ -48,7 +49,8 @@ namespace gxvk::vk::pipelines::detail
     bool LayoutFor(uint32_t samplerMask, bool cover, uint32_t& index)
     {
         const VkDescriptorSetLayout coverLayout = cover ? gxvk::vk::cover::SetLayout() : VK_NULL_HANDLE;  // SXC:
-        if (cover && coverLayout == VK_NULL_HANDLE) return false;
+        const VkDescriptorSetLayout lightsLayout = cover ? gxvk::vk::lights::SetLayout() : VK_NULL_HANDLE;
+        if (cover && (coverLayout == VK_NULL_HANDLE || lightsLayout == VK_NULL_HANDLE)) return false;
         for (uint32_t i = 0; i < s.layoutCount; ++i)
         {
             if (s.layouts[i].mask == samplerMask && s.layouts[i].cover == cover)
@@ -101,10 +103,10 @@ namespace gxvk::vk::pipelines::detail
         push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.offset     = 0;
         push.size       = kPushBytes;
-        const VkDescriptorSetLayout sets[3] = { e.set0, s.regsLayout, coverLayout };
+        const VkDescriptorSetLayout sets[4] = { e.set0, s.regsLayout, coverLayout, lightsLayout };
         VkPipelineLayoutCreateInfo layout = {};
         layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout.setLayoutCount         = cover ? 3 : 2;
+        layout.setLayoutCount         = cover ? 4 : 2;
         layout.pSetLayouts            = sets;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges    = &push;

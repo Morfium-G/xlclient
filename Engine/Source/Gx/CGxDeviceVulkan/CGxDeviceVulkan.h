@@ -10,6 +10,7 @@
 #include "Engine/Source/Storm/H/stpl.h"
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: surface covers
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: point lights
 
 namespace SXC::Cover { struct Decal; }  // SXC: projected textures on the raised covers
 
@@ -172,6 +173,8 @@ class CGxDeviceVulkan : public CGxDevice {
     // SXC: the covers' data for our terrain shader (SXC/Cover/Cover.h -> Vulkan/Cover), its textures
     // resolved to this device's images. Registered at ICreateDrawPath.
     static bool SxcCoverFrame(gxvk::vk::cover::Frame& out);
+    // SXC: our point lights for the shaders that light per pixel (SXC/Lights -> Vulkan/Lights).
+    static bool SxcLightsFrame(gxvk::vk::lights::Frame& out);
 };
 
 CGxDevice* CreateCGxDeviceVulkan();

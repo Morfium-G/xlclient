@@ -24,6 +24,8 @@
 #include "SXC/Log.h"  // SXC:
 #include "SXC/Settings/Settings.h"  // SXC: [Terrain] OurShader
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: our terrain shader's covers
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: and its point lights
+#include "SXC/Lights/Lights.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"  // SXC:
 
 namespace {
@@ -445,8 +447,8 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
     }
 
     // SXC: our terrain shader for a terrain pair it covers (both stages: it pairs only with itself). It
-    // reads the covers' set 2, so it needs Vulkan/Cover.
-    if (vsTranslated && psTranslated && OurTerrain().Get() && gxvk::vk::cover::Ready()) {
+    // reads the covers' set 2 and the lights' set 3, so it needs Vulkan/Cover and Vulkan/Lights.
+    if (vsTranslated && psTranslated && OurTerrain().Get() && gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready()) {
         const CGxShader* vsShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
         const CGxShader* psShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
 
@@ -462,6 +464,11 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
                 draw.terrainVertex = v.options;
                 draw.terrainFragment = p.options;
 
+                // Our point lights replace the client's 3 per chunk while a mod has them on (step 6a).
+                if (SXC::Lights::StockTerrainOff()) {
+                    draw.terrainVertex &= ~pipelines::terrain::kVertexPointLights;
+                }
+
                 // A chunk that can carry depth (the cover seam's c13.x) is raised through the
                 // tessellation where the device has it, its flat self drawn a little lower first so
                 // a hairline where two chunks' covers don't meet shows ground (step 5c).
@@ -474,6 +481,7 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
                 // The covers' set for this frame, made now: its textures resolve like the draw's own
                 // stages, before the draw takes the pass (an inline upload may end it).
                 gxvk::vk::cover::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial());
+                gxvk::vk::lights::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial());
 
                 if (g_terrainDraws++ == 0) {
                     SXC::LogOnce("gxvk-terrain-on", "vulkan: our terrain shader draws the terrain (first: %s / %s)", vsShader->m_key.m_str, psShader->m_key.m_str);

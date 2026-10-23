@@ -24,6 +24,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 #include "SXC/Cover/Cover.h"  // SXC: surface covers
+#include "SXC/Lights/Lights.h" // SXC: point lights
 
 namespace context   = gxvk::vk::context;
 namespace frame     = gxvk::vk::frame;
@@ -252,7 +253,36 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         SXC::Fog::SetRenderer(&CGxDeviceVulkan::SxcFogRender, &gxvk::vk::fog::Status);  // SXC: volumetric fog
         gxvk::vk::cover::SetProvider(&CGxDeviceVulkan::SxcCoverFrame);                  // SXC: surface covers
         SXC::Cover::SetDevice(gxvk::vk::cover::Ready(), gxvk::vk::cover::TextureSlots(), &gxvk::vk::cover::Status);
+        gxvk::vk::lights::SetProvider(&CGxDeviceVulkan::SxcLightsFrame);                // SXC: point lights
+        SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
     }
+}
+
+// SXC: our point lights, gathered once per frame at its first terrain draw (SXC/Lights).
+bool CGxDeviceVulkan::SxcLightsFrame(gxvk::vk::lights::Frame& out) {
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+
+    if (!device || !device->m_drawPath) {
+        return false;
+    }
+
+    const SXC::Lights::Frame& in = SXC::Lights::Current();
+
+    if (!in.on) {
+        return false;
+    }
+
+    out.on = true;
+    out.debug = in.debug;
+    out.originX = in.originX;
+    out.originY = in.originY;
+    out.cellSize = in.cellSize;
+    out.cells = in.cells;
+    out.perCell = in.perCell;
+    out.lightCount = in.lightCount;
+    out.lights = in.lights;
+    out.cellLights = in.cellLights;
+    return true;
 }
 
 // SXC: the covers' data for our terrain shader, once per frame at its first terrain draw: what the mod
