@@ -66,6 +66,7 @@ typedef struct sxc_lights_assignment
     float       direction[3]; ///< spot: where the cone points, in the model's space
     uint32_t    light_id;     ///< a kind's id; 0 = no light (with the flag: only suppresses)
     uint32_t    flags;        ///< SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS
+    uint32_t    id;           ///< the row's ID (the log names it)
 } sxc_lights_assignment;
 
 #define SXC_LIGHTS_POINT 0u

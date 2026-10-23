@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 #include "SXC/Api/sxc_lights.h"
+#include "SXC/Log.h"
 #include "Engine/Source/Model2/M2Data.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "Engine/Source/Model2/M2ModelLight.h"
@@ -214,6 +215,15 @@ namespace {
 
         if (!found) {
             s_stats.attach_missing++;
+            char key[64];
+            std::snprintf(key, sizeof(key), "lights-attach|%u|%u", a.id, s_tableGeneration);
+            static const char* const kTypes[] = { "origin", "attachment point", "bone", "particle emitter" };
+            const uint32_t count = a.attach_type == SXC_LIGHTS_ATTACH_POINT ? data->m_attachmentIndicesById.m_count
+                                 : a.attach_type == SXC_LIGHTS_ATTACH_BONE  ? data->m_bones.m_count
+                                                                            : data->m_particles.m_count;
+            SXC::LogOnce(key, "lights: DoodadLightAssignment %u (%s): %s %d not on the model (it has %u%s); placed at its origin", a.id,
+                         at.model->m_shared->m_fileName, a.attach_type < 4 ? kTypes[a.attach_type] : "unknown attachment type", a.attach_index, count,
+                         a.attach_type == SXC_LIGHTS_ATTACH_POINT ? " attachment IDs" : "");
         }
 
         Found f;
