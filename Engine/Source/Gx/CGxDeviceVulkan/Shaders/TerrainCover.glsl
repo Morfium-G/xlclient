@@ -9,7 +9,8 @@
 //
 // Pixel registers (set per chunk by SXC::Cover::BeforeChunkDraw): p11 each layer's painted entry, p12
 // each layer's fallen-snow look (entry indices as floats, 0 = none), p13.x whether the chunk is raised,
-// p13.y its liquid surface (world z; -100000 none).
+// p13.y its liquid surface (world z; -100000 none), p13.z the deepest its painted covers' bases lie below
+// the terrain (yd; the underlay sinks under it, Terrain.vert).
 // Set 2: the parameters and entries, the near and far maps (fallen snow, painted snow's kept share,
 // moisture above rest, the water surface), the cover textures. The look follows WXL's SurfaceCover
 // (Shape, the noises, the slope limit, the melt).
@@ -175,7 +176,8 @@ struct CoverSpot
     float covered;       // the painted layers' weight (after their water, moisture and melt)
     float painted;       // the painted cover's share (shaped, slope-limited)
     float paintedHeight; // yd
-    float rowWet;        // the painted rows' own wet look
+    float below;         // yd the painted cover's base lies below the terrain (a negative z offset: mud)
+    float rowWet;      // the painted rows' own wet look
     float snow;          // fallen snow's share (hides the ground from the thin depth on)
     float snowHeight;    // yd
     float snowWet;       // the snow looks' own wet look
@@ -231,6 +233,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
     s.covered = 0.0;
     s.painted = 0.0;
     s.paintedHeight = 0.0;
+    s.below = 0.0;
     s.rowWet = 0.0;
     s.snow = 0.0;
     s.snowHeight = 0.0;
@@ -292,6 +295,8 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
         // it shows), tapering out with its share.
         float driftF = max(1.0 + driftAmount * inv * cover.tuning2.y * (s.drift * 2.0 - 1.0), 0.0);
         s.paintedHeight = max((depth * inv * driftF * cover.tuning.z + zOffset * inv) * s.painted, 0.0);
+        // The part below the terrain is still cover: the trails press into it (CoverTrailed).
+        s.below = max(-zOffset * inv, 0.0) * s.painted;
     }
 
     // Fallen snow on top: its look from the layers' snow looks by their weights (built in where none),
@@ -343,8 +348,10 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
         s.snowHeight = depth * s.snow;
     }
 
-    // The trails' properties: by each cover's part of the height (a row without them: soft, 0.3 rim, 30 s).
-    float hp = s.paintedHeight, hs = s.snowHeight;
+    // The trails' properties: by each cover's part of the depth, the painted cover's below the terrain
+    // too (a row without them: soft, 0.3 rim, 30 s). Mud wholly below the terrain took the defaults, its
+    // own rim and stiffness only once it rose above: weak rims, then a jump to the row's (2026-10-23).
+    float hp = s.paintedHeight + s.below, hs = s.snowHeight;
 
     if (hp + hs > 0.0)
     {
@@ -411,22 +418,32 @@ void CoverTrailSample(sampler2D map, vec4 m, vec2 xy, float top, float rise, flo
     rim = mix(mix(rs[0], rs[1], f.x), mix(rs[2], rs[3], f.x), f.y);
 }
 
-// The covers' height after the trails (yd above groundZ) from what they'd be untouched (h, the spot s):
-// pressed down to where feet went (the fine layer: crisp, filling back in over the cover's relax time;
-// the coarse one: half as deep, softer, kept for the persist time), never below the terrain (bare
-// ground doesn't deform), held up by the cover's stiffness, softened at the edges the deeper the cover
-// (slurred trails in deep snow), a rim pushed up beside.
+// The covers' height after the trails (yd above groundZ; below 0 in a print in mud) from what they'd be
+// untouched (h, the spot s): pressed down to where feet went (the fine layer: crisp, filling back in over
+// the cover's relax time; the coarse one: half as deep, softer, kept for the persist time), never below
+// the cover's base (the terrain, or deeper where the cover sits below it; bare ground doesn't deform),
+// held up by the cover's stiffness, softened at the edges the deeper the cover (slurred trails in deep
+// snow), a rim pushed up beside.
+//
+// A cover whose base lies below the terrain (mud: a negative z offset, only its top shows) is carved as
+// if the unit stood on that base: the trails' heights (where the bones went, the unit on the terrain)
+// shifted down by it, so feet sink through the whole cover, not just the part above the terrain
+// (Seyri, 2026-10-22: since the bones carve, mud showed no prints).
 float CoverTrailed(vec2 xy, float groundZ, float h, CoverSpot s)
 {
-    if (cover.trail.w < 0.5 || h <= 0.0)
+    float below = s.below;
+
+    if (cover.trail.w < 0.5 || h + below <= 0.0)
     {
         return h;
     }
 
     float top = groundZ + h;
+    float span = h + below;            // the whole cover, its base to its top
+    float topB = top + below;          // its top where the bones' heights are taken
     float relax = max(s.relax, 0.5);
     float persist = max(cover.trail.y, relax);
-    float slur = clamp(h * cover.trail.z, 0.0, 0.6);
+    float slur = clamp(span * cover.trail.z, 0.0, 0.6);
     const vec2 taps[5] = vec2[5](vec2(0.0), vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0));
     int count = slur > 0.02 ? 5 : 1;
     float ceiling = 0.0, rim = 0.0;
@@ -435,21 +452,22 @@ float CoverTrailed(vec2 xy, float groundZ, float h, CoverSpot s)
     {
         vec2 p = xy + taps[k] * slur;
         float cf, rf, cc, rc;
-        CoverTrailSample(sTrailFine, cover.trailFine, p, top, h / relax, relax, cf, rf);
-        CoverTrailSample(sTrailCoarse, cover.trailCoarse, p, top, h / persist, persist, cc, rc);
-        ceiling += min(cf, top - (top - cc) * 0.5);
+        CoverTrailSample(sTrailFine, cover.trailFine, p, topB, span / relax, relax, cf, rf);
+        CoverTrailSample(sTrailCoarse, cover.trailCoarse, p, topB, span / persist, persist, cc, rc);
+        ceiling += min(cf, topB - (topB - cc) * 0.5);
         rim += max(rf, rc * 0.5);
     }
 
-    ceiling /= float(count);
+    ceiling = ceiling / float(count) - below;
     rim /= float(count);
     float stiffness = clamp(s.stiffness, 0.0, 1.0);
-    float pressed = max(groundZ, min(top, ceiling));
+    float pressed = max(groundZ - below, min(top, ceiling));
     pressed = mix(pressed, top, stiffness);
-    return pressed - groundZ + rim * s.rimShare * cover.trail2.x * h * (1.0 - stiffness);
+    return pressed - groundZ + rim * s.rimShare * cover.trail2.x * span * (1.0 - stiffness);
 }
 
-// The covers' height above the terrain (yd): the painted cover, fallen snow on it.
+// How much cover lies here (yd): its height above the terrain (the painted cover, fallen snow on it) and
+// what lies below it (the trails can press that far down; Terrain.tesc subdivides where either is).
 float CoverHeight(vec2 xy, float groundZ, float up, vec4 w)
 {
     if (cover.enable.x < 0.5)
@@ -458,7 +476,7 @@ float CoverHeight(vec2 xy, float groundZ, float up, vec4 w)
     }
 
     CoverSpot s = CoverEvaluate(xy, groundZ, up, w);
-    return s.paintedHeight + s.snowHeight;
+    return s.paintedHeight + s.snowHeight + (cover.trail.w > 0.5 ? s.below : 0.0);
 }
 
 #if !COVER_DEPTH_ONLY

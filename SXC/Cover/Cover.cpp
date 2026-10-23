@@ -809,12 +809,21 @@ namespace SXC::Cover {
             if (s_look.tess_detail > 0.0f && s_look.depth_scale > 0.0f) {
                 bool raised = s_look.fallen_snow && std::fmax(std::fmax(s_near.mostFallen, s_far.mostFallen), s_look.outside[0]) > 0.002f;
 
-                for (int l = 0; l < 4 && !raised; l++) {
+                // The deepest a painted cover's base lies below the terrain (mud): prints go down to it,
+                // and the chunk's underlay sinks under it (Terrain.vert).
+                float below = 0.0f;
+
+                for (int l = 0; l < 4; l++) {
                     const uint32_t e = static_cast<uint32_t>(constants[l]);
-                    raised = e >= 1 && e <= s_entries.size() && s_entries[e - 1].depth > 0.0f;
+
+                    if (e >= 1 && e <= s_entries.size() && s_entries[e - 1].depth > 0.0f) {
+                        raised = true;
+                        below = std::fmax(below, -s_entries[e - 1].z_offset);
+                    }
                 }
 
                 constants[8] = raised ? 1.0f : 0.0f;
+                constants[10] = raised && s_look.trails ? below : 0.0f;
             }
         }
 

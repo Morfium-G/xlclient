@@ -7,7 +7,9 @@
 // Every varying is written, so any of our terrain pixel modules pairs with it. Chunks that carry covers
 // are drawn through the tessellation instead (TerrainPatch.vert, Terrain.tesc, Terrain.tese, step 5c),
 // and once more with this shader, lowered (kSunk), under the raised surface: where two chunks' covers
-// don't meet exactly at their border, the ground shows through the hairline instead of the sky.
+// don't meet exactly at their border, the ground shows through the hairline instead of the sky. It sinks
+// under the deepest base of the chunk's covers too (p13.z: mud lies below the terrain, and prints in it
+// go down to its base; above that, the underlay hid them).
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -25,7 +27,7 @@ void main()
 
     if (kSunk)
     {
-        position.z -= 0.03;
+        position.z -= 0.03 + max(regs.p[13].z, 0.0);
     }
 
     vec3 up = inNormal.xyz * inversesqrt(max(dot(inNormal.xyz, inNormal.xyz), 1e-12));

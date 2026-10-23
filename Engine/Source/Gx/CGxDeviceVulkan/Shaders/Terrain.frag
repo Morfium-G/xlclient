@@ -161,7 +161,7 @@ void main()
     if (!kUnderlay && cover.enable.x > 0.5)
     {
         CoverWriteSurface(coverWorld.xyz, coverTint.w);
-        CoverWriteDepth(coverWorld.z - coverTint.w > 0.005);
+        CoverWriteDepth(abs(coverWorld.z - coverTint.w) > 0.005);   // raised, or a print sunk below it
     }
 
     // The shadow: the alpha map's baked one, or the cascades'.

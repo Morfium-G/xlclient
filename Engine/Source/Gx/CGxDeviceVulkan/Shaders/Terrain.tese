@@ -67,7 +67,7 @@ void main()
     // Where the cover has no height the point is the terrain itself: its normal stays (a bare point next
     // to cover kept a slope toward it before, and those single vertices shaded darker or lighter). On the
     // cover, its slope over a step to either side (centred: no lean toward +x or +y).
-    if (cover.enable.x > 0.5 && n.z > 0.0 && h > 0.0)
+    if (cover.enable.x > 0.5 && n.z > 0.0 && h != 0.0)
     {
         vec2 slope = -n.xy / max(n.z, 0.05);   // the terrain's dz/dx, dz/dy
         vec2 dx = vec2(kSlopeStep, 0.0), dy = vec2(0.0, kSlopeStep);
@@ -101,6 +101,6 @@ void main()
         fog += b[k] * TerrainFog(cornerPos);
     }
 
-    float stock = 1.0 - clamp(h / kOwnLightHeight, 0.0, 1.0);
+    float stock = 1.0 - clamp(abs(h) / kOwnLightHeight, 0.0, 1.0);   // a print in mud sinks below the terrain
     TerrainVertexLit(vec4(position.x, position.y, position.z + h, 1.0), vec4(surface, 0.0), colour, position.z, n.z, stock, c0, c1, true, fog);
 }
