@@ -318,6 +318,7 @@ bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs,
     }
 
     d.vertexRecord = instanced;
+    d.vertexRows = instanced->vconst == gxvk::vk::pipelines::kVertexRowsLarge ? gxvk::vk::pipelines::kVertexRowsLarge : gxvk::vk::pipelines::kVertexRowsSmall;
     static_assert(sizeof(SXC::Grass::Run) == sizeof(gxvk::vk::pipelines::Run), "SXC::Grass::Run is the pipelines' Run");
     d.runs = reinterpret_cast<const gxvk::vk::pipelines::Run*>(runs);
     d.runCount = count;

@@ -11,9 +11,9 @@
 
 namespace gxvk::vk::grass
 {
-    constexpr uint32_t kPlantBytes   = 64;       ///< rows 0..2 (48), normal (12), colour (4: B, G, R, A)
+    constexpr uint32_t kPlantBytes   = 80;       ///< rows 0..2 (48), normal (12), colour (4: B, G, R, A), motion (16: root V, 1 / span, wind, push)
     constexpr uint32_t kVertexBytes  = 20;       ///< position (12), texture coordinate (8)
-    constexpr uint32_t kMaxPlants    = 1u << 20; ///< the pool (64 MB)
+    constexpr uint32_t kMaxPlants    = 1u << 20; ///< the pool (80 MB)
     constexpr uint32_t kMaxVertices  = 1u << 18; ///< the plant models' vertices, all together
     constexpr uint32_t kMaxIndices   = 1u << 20;
 

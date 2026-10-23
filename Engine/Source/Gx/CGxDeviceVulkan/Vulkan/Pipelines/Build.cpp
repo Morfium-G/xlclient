@@ -281,6 +281,12 @@ namespace
                         a.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
                         a.offset   = 16 * row;
                     }
+                    // Step 7b: the plant's motion values (GrassMotion.glsl's sxcPlantMotion).
+                    VkVertexInputAttributeDescription& m = in.attrs[in.count++];
+                    m.location = 5;
+                    m.binding  = k.plantStream - 1;
+                    m.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+                    m.offset   = 64;
                 }
                 return true;
             }

@@ -2,6 +2,11 @@
 
 #include "SXC/Grass/Grass.h"
 
+#include <cmath>
+#include <cstring>
+#include <string>
+#include "SXC/Api/sxc_grass.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <unordered_map>
@@ -48,6 +53,7 @@ namespace {
         bool ok = false;
         uint32_t first = 0, count = 0;
         uint32_t adds = 0;   // the batches' adds when built (a change rebuilds)
+        uint32_t generation = 0;   // the motion table's when built (step 7b)
         std::vector<Group> groups;
     };
     std::unordered_map<const CDetailDoodadInst*, Chunk> s_chunks;
@@ -64,6 +70,162 @@ namespace {
         uint32_t chunks = 0, plants = 0, runs = 0, draws = 0, built = 0, stock = 0;
     } s_stats, s_last;
     char s_status[256] = "";
+
+    // --- the motion (step 7b; WXL's features/GrassDoodads and GrassMotion) ------------------------
+    // Per plant model: the bend from its root to its tip in texture V, found from its geometry (the mean
+    // V of the lowest and of the highest 12% of its vertices), unless the mod's table overrides it;
+    // models under 0.15 yd don't sway. Its plants carry {root V, 1 / (tip V - root V), wind scale, push
+    // scale}; a model with no usable mapping gets WXL's fallback (root at V 1, tip at V 0).
+    constexpr float kRootTipBand = 0.12f;
+    constexpr float kFlatHeight = 0.15f;
+
+    struct Doodad {
+        bool analyzed = false, valid = false, flat = false;
+        float height = 0.0f, rootV = 1.0f, tipV = 0.0f;
+        std::string path;
+    };
+    std::unordered_map<uint32_t, Doodad> s_doodads;
+    std::unordered_map<uint32_t, sxc_grass_doodad> s_overrides;
+    uint32_t s_generation = 1;   // bumped when the overrides change: every chunk is placed anew
+
+    Doodad& Analyze(uint32_t id) {
+        Doodad& d = s_doodads[id];
+
+        if (d.analyzed || id >= CDetailDoodad::s_doodadList.Count()) {
+            return d;
+        }
+
+        const CDetailDoodadData* data = CDetailDoodad::s_doodadList[id];
+        CM2Model* model = data ? data->m_model : nullptr;
+
+        if (!model || !(model->m_fFlags & 1) || !model->m_shared || !model->m_shared->m_skinData || !model->m_shared->m_data) {
+            return d;
+        }
+
+        d.analyzed = true;
+        d.path = model->m_shared->m_fileName ? model->m_shared->m_fileName : "";
+        const M2SkinProfile* skin = model->m_shared->m_skinData;
+        const M2Data* m2 = model->m_shared->m_data;
+        float minZ = 1e30f, maxZ = -1e30f;
+
+        for (uint32_t v = 0; v < skin->m_vertices.m_count; v++) {
+            const uint16_t g = skin->m_vertices[v];
+
+            if (g < m2->m_vertices.m_count) {
+                minZ = std::min(minZ, m2->m_vertices[g].m_position.z);
+                maxZ = std::max(maxZ, m2->m_vertices[g].m_position.z);
+            }
+        }
+
+        if (minZ > maxZ) {
+            return d;
+        }
+
+        const float band = (maxZ - minZ) * kRootTipBand;
+        float rootSum = 0.0f, tipSum = 0.0f;
+        uint32_t rootN = 0, tipN = 0;
+
+        for (uint32_t v = 0; v < skin->m_vertices.m_count; v++) {
+            const uint16_t g = skin->m_vertices[v];
+
+            if (g >= m2->m_vertices.m_count) {
+                continue;
+            }
+
+            const float z = m2->m_vertices[g].m_position.z, t = m2->m_vertices[g].m_texcoord[0].y;
+
+            if (z <= minZ + band) {
+                rootSum += t;
+                rootN++;
+            }
+
+            if (z >= maxZ - band) {
+                tipSum += t;
+                tipN++;
+            }
+        }
+
+        if (!rootN || !tipN) {
+            return d;
+        }
+
+        d.height = maxZ - minZ;
+        d.rootV = rootSum / rootN;
+        d.tipV = tipSum / tipN;
+        d.flat = d.height < kFlatHeight;
+        d.valid = std::fabs(d.tipV - d.rootV) > 0.01f || d.flat;
+        return d;
+    }
+
+    // What the plants of a model carry (false: its model isn't read yet).
+    bool Entry(uint32_t id, float out[4]) {
+        out[0] = 1.0f;
+        out[1] = -1.0f;
+        out[2] = 1.0f;
+        out[3] = 1.0f;
+        const Doodad& d = Analyze(id);
+
+        if (!d.analyzed) {
+            return false;
+        }
+
+        const auto o = s_overrides.find(id);
+        float rootV = d.rootV, tipV = d.tipV, stiffness = 0.0f;
+        bool wind = d.valid && !d.flat, push = d.valid && !d.flat, flip = false;
+
+        if (o != s_overrides.end()) {
+            const sxc_grass_doodad& r = o->second;
+            rootV = r.root_v >= 0.0f ? r.root_v : rootV;
+            tipV = r.tip_v >= 0.0f ? r.tip_v : tipV;
+            const bool usable = d.valid || (r.root_v >= 0.0f && r.tip_v >= 0.0f);
+            wind = usable && !(r.flags & SXC_GRASS_NO_WIND);
+            push = usable && !(r.flags & SXC_GRASS_NO_PUSH);
+            flip = (r.flags & SXC_GRASS_FLIP) != 0;
+            stiffness = std::min(std::max(r.stiffness, 0.0f), 1.0f);
+        } else if (!d.valid) {
+            return true;   // the fallback
+        }
+
+        const float root = flip ? tipV : rootV, tip = flip ? rootV : tipV, span = tip - root, flex = 1.0f - stiffness;
+        out[0] = root;
+        out[1] = std::fabs(span) > 1e-4f ? 1.0f / span : 0.0f;
+        out[2] = wind ? flex : 0.0f;
+        out[3] = push ? flex : 0.0f;
+        return true;
+    }
+
+    // The rows the motion reads from c64 on (Shaders/GrassMotion.glsl).
+    constexpr uint32_t kMotionFirstRow = 64;
+    constexpr uint32_t kMotionRows = 4 + SXC_GRASS_GRID * SXC_GRASS_GRID + SXC_GRASS_MAX_ACTORS;
+    float s_motionRows[kMotionRows][4] = {};
+    bool s_motionOn = false;
+
+    void SetMotion(const sxc_grass_motion& m) {
+        std::memset(s_motionRows, 0, sizeof(s_motionRows));
+        s_motionOn = m.on != WXL_FALSE;
+
+        if (!s_motionOn) {
+            return;
+        }
+
+        const float anchor = std::min(std::max(m.anchor, 0.0f), 0.9f);
+        const float inv = m.grid_spacing > 0.01f ? 1.0f / m.grid_spacing : 0.125f;
+        const float h[4][4] = {
+            { m.time, anchor, 1.0f / (1.0f - anchor), m.amplitude },
+            { m.flutter, m.flutter_speed, m.push_strength, 1.0f },
+            { inv, inv, m.grid_origin[0] * inv + 0.5f, m.grid_origin[1] * inv + 0.5f },
+            { m.player[0], m.player[1], m.player[2], m.actor_range * m.actor_range },
+        };
+        std::memcpy(s_motionRows, h, sizeof(h));
+
+        for (uint32_t c = 0; c < SXC_GRASS_GRID * SXC_GRASS_GRID; c++) {
+            std::memcpy(s_motionRows[4 + c], m.wind[c], sizeof(m.wind[c]));
+        }
+
+        for (uint32_t a = 0; a < SXC_GRASS_MAX_ACTORS && a < m.actor_count; a++) {
+            std::memcpy(s_motionRows[4 + SXC_GRASS_GRID * SXC_GRASS_GRID + a], m.actors[a], sizeof(m.actors[a]));
+        }
+    }
 
     uint32_t AddsOf(CDetailDoodadInst* inst) {
         uint32_t n = 0;
@@ -139,7 +301,8 @@ namespace {
         c.count = total;
         static std::vector<float> plants, sorted;
         plants.resize(static_cast<size_t>(total) * 16);
-        sorted.resize(plants.size());
+        sorted.resize(static_cast<size_t>(total) * 20);
+        c.generation = s_generation;
         uint32_t written = 0;
 
         for (CDetailDoodadInstBatch& b : inst->m_batches) {
@@ -161,7 +324,9 @@ namespace {
 
             for (uint32_t k = 0; k < order.size(); k++) {
                 const uint32_t id = b.m_adds[order[k]].m_doodadId;
-                std::copy(base + static_cast<size_t>(order[k]) * 16, base + static_cast<size_t>(order[k]) * 16 + 16, sorted.data() + static_cast<size_t>(written + k) * 16);
+                float* plant = sorted.data() + static_cast<size_t>(written + k) * 20;
+                std::copy(base + static_cast<size_t>(order[k]) * 16, base + static_cast<size_t>(order[k]) * 16 + 16, plant);
+                Entry(id, plant + 16);   // step 7b: the motion values
 
                 if (c.groups.empty() || c.groups.back().doodadId != id || c.groups.back().texture != b.m_texture || k == 0) {
                     c.groups.push_back(Group{ b.m_texture, id, written + k, 0 });
@@ -233,7 +398,7 @@ namespace SXC::Grass {
 
         Chunk& c = s_chunks[inst];
 
-        if (c.adds != AddsOf(inst) || !c.ok) {
+        if (c.adds != AddsOf(inst) || !c.ok || c.generation != s_generation) {
             Release(c);
 
             if (!Build(inst, c)) {
@@ -272,6 +437,9 @@ namespace SXC::Grass {
         world.Translate(C3Vector(0.0f, 0.0f, 0.0f) - CWorldScene::s_activeWorldView);
         CDetailDoodad::SetupVertexShader(world, 0);
 
+        // Step 7b: the motion's rows (after the client's c0..c22), every frame: other shaders use them too.
+        g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kMotionFirstRow, &s_motionRows[0][0], kMotionRows);
+
         for (const TextureRuns& t : s_frame) {
             if (t.runs.empty()) {
                 continue;
@@ -308,5 +476,67 @@ namespace SXC::Grass {
         std::snprintf(s_status, sizeof(s_status), "%u chunks, %u plants in %u runs, %u draws; %u chunks built this frame, %u drawn the stock way; pool %u plants",
                       s_last.chunks, s_last.plants, s_last.runs, s_last.draws, s_last.built, s_last.stock, s_device->plantsInUse());
         return s_status;
+    }
+}
+
+// --- sxc.grass ----------------------------------------------------------------------------------------
+namespace {
+    wxl_bool WXL_CALL ApiAvailable() {
+        return SXC::Grass::Active() ? WXL_TRUE : WXL_FALSE;
+    }
+
+    void WXL_CALL ApiSetMotion(const sxc_grass_motion* motion) {
+        if (!motion || motion->struct_size < sizeof(sxc_grass_motion)) {
+            s_motionOn = false;
+            std::memset(s_motionRows, 0, sizeof(s_motionRows));
+            return;
+        }
+
+        SetMotion(*motion);
+    }
+
+    void WXL_CALL ApiSetDoodads(const sxc_grass_doodad* rows, uint32_t count) {
+        s_overrides.clear();
+
+        for (uint32_t i = 0; rows && i < count; i++) {
+            s_overrides[rows[i].id] = rows[i];
+        }
+
+        if (++s_generation == 0) {
+            s_generation = 1;
+        }
+    }
+
+    wxl_bool WXL_CALL ApiDoodadInfo(uint32_t id, sxc_grass_doodad_info* out) {
+        if (!out || out->struct_size < sizeof(sxc_grass_doodad_info) || id >= CDetailDoodad::s_doodadList.Count() || !CDetailDoodad::s_doodadList[id]) {
+            return WXL_FALSE;
+        }
+
+        const uint32_t size = out->struct_size;
+        *out = sxc_grass_doodad_info{};
+        out->struct_size = size;
+        const Doodad& d = Analyze(id);
+        static std::string path;
+        path = d.path;
+        out->path = path.c_str();
+        out->analyzed = d.analyzed ? WXL_TRUE : WXL_FALSE;
+        out->height = d.height;
+        out->root_v = d.rootV;
+        out->tip_v = d.tipV;
+        out->flat = d.flat ? WXL_TRUE : WXL_FALSE;
+        Entry(id, out->entry);
+        return WXL_TRUE;
+    }
+
+    const char* WXL_CALL ApiStatus() {
+        return SXC::Grass::Status();
+    }
+
+    const sxc_grass_api s_api = { sizeof(sxc_grass_api), ApiAvailable, ApiSetMotion, ApiSetDoodads, ApiDoodadInfo, ApiStatus };
+}
+
+namespace SXC::Grass {
+    const sxc_grass_api* Api() {
+        return &s_api;
     }
 }

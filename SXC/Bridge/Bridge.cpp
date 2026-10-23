@@ -17,6 +17,7 @@
 #include "SXC/Api/sxc_fog.h"
 #include "SXC/Api/sxc_cover.h"
 #include "SXC/Api/sxc_lights.h"
+#include "SXC/Api/sxc_grass.h"
 #include "wxl/mod.h"
 
 namespace {
@@ -36,6 +37,7 @@ namespace {
         { SXC_FOG_SERVICE, SXC_FOG_SERVICE_VERSION },
         { SXC_COVER_SERVICE, SXC_COVER_SERVICE_VERSION },
         { SXC_LIGHTS_SERVICE, SXC_LIGHTS_SERVICE_VERSION },
+        { SXC_GRASS_SERVICE, SXC_GRASS_SERVICE_VERSION },
     };
 
     void Log(const wxl_host* host, wxl_log_level level, const std::string& line) {
