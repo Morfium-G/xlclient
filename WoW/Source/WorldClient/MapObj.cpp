@@ -60,6 +60,7 @@
 #include <new>
 #include "Engine/Source/ConsoleBase/ConsoleVar.h"
 #include "Engine/Source/Gx/CGxMatrixStack.h"
+#include "SXC/Lights/Lights.h"  // SXC: indoor / outdoor surfaces for our lights
 
 // STATIC: 0x00AEE008
 uint32_t CMapObj::s_maxLiquidQueryDepth = 2;
@@ -1136,6 +1137,9 @@ void CMapObj::RenderGroup(int32_t groupIndex, C44Matrix& matrix, TSExplicitList<
     CShaderEffect::SetGlobalLighting(&CMap::s_mapLight->m_light);
     CShaderEffect::UpdateProjMatrix();
 
+    // SXC: our lights tell an indoor group's surfaces (MOGP 0x2000) from outdoor ones (step 6c).
+    SXC::Lights::GroupDrawBegin((group->m_flags & 0x2000) != 0);
+
     uint32_t index = 0;
 
     for (CWFrustum* frustum = frustumList->Head(); frustum; frustum = frustumList->Next(frustum)) {
@@ -1150,6 +1154,8 @@ void CMapObj::RenderGroup(int32_t groupIndex, C44Matrix& matrix, TSExplicitList<
 
         index++;
     }
+
+    SXC::Lights::GroupDrawEnd();  // SXC:
 
     if (CWorld::enables & 0x40000000) {
         this->RenderNormals(group);

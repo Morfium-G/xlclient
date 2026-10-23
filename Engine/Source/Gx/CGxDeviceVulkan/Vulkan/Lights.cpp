@@ -21,6 +21,8 @@ namespace
     using gxvk::vk::lights::kMaxCells;
     using gxvk::vk::lights::kMaxLights;
     using gxvk::vk::lights::kMaxPerCell;
+    using gxvk::vk::lights::kSurfaceCount;
+    using gxvk::vk::lights::kSurfaceOff;
 
     using gxvk::log::Write;
     using gxvk::log::Info;
@@ -34,11 +36,13 @@ namespace
     constexpr VkDeviceSize kHeaderBytes = 80;
     constexpr VkDeviceSize kLightsBytes = kHeaderBytes + kMaxLights * kLightBytes;
     constexpr VkDeviceSize kCellsBytes  = static_cast<VkDeviceSize>(kMaxCells) * kMaxCells * kMaxPerCell * sizeof(uint32_t);
+    /// Binding 2 (LightSurface): one vec4 per surface class, each at its own aligned offset.
+    constexpr VkDeviceSize kClassStride = 256;
 
     struct Slot
     {
-        VkDescriptorSet set    = VK_NULL_HANDLE;
-        VkDescriptorSet off    = VK_NULL_HANDLE;   ///< both bindings on `State::offBuffer` (the lights off)
+        /// Per surface class (Surface); kSurfaceOff's both buffers are `State::offBuffer` (the lights off).
+        VkDescriptorSet sets[kSurfaceCount] = {};
         memory::Buffer  lights, cells;
         uint64_t        serial = 0;
     };
@@ -54,6 +58,7 @@ namespace
         VkDescriptorPool      pool      = VK_NULL_HANDLE;
         Slot                  slots[kSlots];
         memory::Buffer        offBuffer;          ///< a zero header: the lights off
+        memory::Buffer        classes;            ///< binding 2: the surface classes, kClassStride apart
         char                  status[160] = "no terrain drawn yet";
     };
     State s;
@@ -88,67 +93,71 @@ namespace gxvk::vk::lights
         VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         if (context::Caps().enabled & gxvk::vk::kCapTessellation)
             stages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
-        VkDescriptorSetLayoutBinding bindings[2] = {};
-        for (uint32_t i = 0; i < 2; ++i)
+        VkDescriptorSetLayoutBinding bindings[3] = {};
+        for (uint32_t i = 0; i < 3; ++i)
         {
             bindings[i].binding         = i;
-            bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorType  = i < 2 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[i].descriptorCount = 1;
             bindings[i].stageFlags      = stages;
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayout.bindingCount = 2;
+        setLayout.bindingCount = 3;
         setLayout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
-        VkDescriptorPoolSize size = {};
-        size.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        size.descriptorCount = 4 * kSlots;
+        VkDescriptorPoolSize sizes[2] = {};
+        sizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        sizes[0].descriptorCount = 2 * kSurfaceCount * kSlots;
+        sizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        sizes[1].descriptorCount = kSurfaceCount * kSlots;
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool.maxSets       = 2 * kSlots;
-        pool.poolSizeCount = 1;
-        pool.pPoolSizes    = &size;
+        pool.maxSets       = kSurfaceCount * kSlots;
+        pool.poolSizeCount = 2;
+        pool.pPoolSizes    = sizes;
         if (!Check(d.CreateDescriptorPool(s.device, &pool, nullptr, &s.pool), "vkCreateDescriptorPool")) return false;
 
-        if (!memory::CreateBuffer(kHeaderBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory::Where::Stream, s.offBuffer) || !s.offBuffer.block.mapped)
+        if (!memory::CreateBuffer(kHeaderBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory::Where::Stream, s.offBuffer) || !s.offBuffer.block.mapped
+            || !memory::CreateBuffer(kClassStride * kSurfaceCount, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, memory::Where::Stream, s.classes) || !s.classes.block.mapped)
         {
-            Write(Error, "vulkan: lights: no buffer for the lights off");
+            Write(Error, "vulkan: lights: no buffers for the lights off and the surface classes");
             s.failed = true;
             return false;
         }
         std::memset(s.offBuffer.block.mapped, 0, static_cast<size_t>(kHeaderBytes));
         memory::FlushHost(s.offBuffer.block);
+        std::memset(s.classes.block.mapped, 0, static_cast<size_t>(kClassStride * kSurfaceCount));
+        for (uint32_t c = 0; c < kSurfaceCount; ++c)
+            reinterpret_cast<float*>(static_cast<uint8_t*>(s.classes.block.mapped) + c * kClassStride)[0] = static_cast<float>(c);
+        memory::FlushHost(s.classes.block);
 
-        auto write = [&](VkDescriptorSet set, VkBuffer lights, VkDeviceSize lightsBytes, VkBuffer cells, VkDeviceSize cellsBytes) {
-            VkDescriptorBufferInfo infos[2] = { { lights, 0, lightsBytes }, { cells, 0, cellsBytes } };
-            VkWriteDescriptorSet writes[2] = {};
-            for (uint32_t i = 0; i < 2; ++i)
+        auto write = [&](VkDescriptorSet set, VkBuffer lights, VkDeviceSize lightsBytes, VkBuffer cells, VkDeviceSize cellsBytes, uint32_t surface) {
+            VkDescriptorBufferInfo infos[3] = { { lights, 0, lightsBytes }, { cells, 0, cellsBytes }, { s.classes.handle, surface * kClassStride, 16 } };
+            VkWriteDescriptorSet writes[3] = {};
+            for (uint32_t i = 0; i < 3; ++i)
             {
                 writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[i].dstSet          = set;
                 writes[i].dstBinding      = i;
                 writes[i].descriptorCount = 1;
-                writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[i].descriptorType  = i < 2 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 writes[i].pBufferInfo     = &infos[i];
             }
-            d.UpdateDescriptorSets(s.device, 2, writes, 0, nullptr);
+            d.UpdateDescriptorSets(s.device, 3, writes, 0, nullptr);
         };
 
         for (Slot& slot : s.slots)
         {
-            const VkDescriptorSetLayout layouts[2] = { s.setLayout, s.setLayout };
-            VkDescriptorSet sets[2] = {};
+            VkDescriptorSetLayout layouts[kSurfaceCount];
+            for (VkDescriptorSetLayout& l : layouts) l = s.setLayout;
             VkDescriptorSetAllocateInfo alloc = {};
             alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             alloc.descriptorPool     = s.pool;
-            alloc.descriptorSetCount = 2;
+            alloc.descriptorSetCount = kSurfaceCount;
             alloc.pSetLayouts        = layouts;
-            if (!Check(d.AllocateDescriptorSets(s.device, &alloc, sets), "vkAllocateDescriptorSets")) return false;
-            slot.set = sets[0];
-            slot.off = sets[1];
-            write(slot.off, s.offBuffer.handle, kHeaderBytes, s.offBuffer.handle, kHeaderBytes);
+            if (!Check(d.AllocateDescriptorSets(s.device, &alloc, slot.sets), "vkAllocateDescriptorSets")) return false;
             if (!memory::CreateBuffer(kLightsBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory::Where::Stream, slot.lights) || !slot.lights.block.mapped
                 || !memory::CreateBuffer(kCellsBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory::Where::Stream, slot.cells) || !slot.cells.block.mapped)
             {
@@ -160,7 +169,13 @@ namespace gxvk::vk::lights
             memory::FlushHost(slot.lights.block);
 
             // The buffers never change: the sets are written once.
-            write(slot.set, slot.lights.handle, kLightsBytes, slot.cells.handle, kCellsBytes);
+            for (uint32_t c = 0; c < kSurfaceCount; ++c)
+            {
+                if (c == kSurfaceOff)
+                    write(slot.sets[c], s.offBuffer.handle, kHeaderBytes, s.offBuffer.handle, kHeaderBytes, 0);
+                else
+                    write(slot.sets[c], slot.lights.handle, kLightsBytes, slot.cells.handle, kCellsBytes, c);
+            }
         }
 
         s.ready = true;
@@ -168,11 +183,11 @@ namespace gxvk::vk::lights
         return true;
     }
 
-    VkDescriptorSet FrameSet(uint32_t slotIndex, uint64_t serial)
+    VkDescriptorSet FrameSet(uint32_t slotIndex, uint64_t serial, uint32_t surface)
     {
-        if (!s.ready || slotIndex >= kSlots) return VK_NULL_HANDLE;
+        if (!s.ready || slotIndex >= kSlots || surface >= kSurfaceCount) return VK_NULL_HANDLE;
         Slot& slot = s.slots[slotIndex];
-        if (slot.serial == serial) return slot.set;
+        if (slot.serial == serial) return slot.sets[surface];
 
         Frame f;
         const bool on = s.provider && s.provider(f) && f.on && f.cells > 0 && f.cells <= kMaxCells && f.perCell > 0 && f.perCell <= kMaxPerCell
@@ -197,16 +212,11 @@ namespace gxvk::vk::lights
             std::snprintf(s.status, sizeof s.status, "%u lights on a %u x %u grid (up to %u per cell)", f.lightCount, f.cells, f.cells, f.perCell);
         }
         else
-            std::snprintf(s.status, sizeof s.status, "terrain drawn, lights off");
+            std::snprintf(s.status, sizeof s.status, "lights off");
         std::memcpy(slot.lights.block.mapped, header, sizeof header);
         memory::FlushHost(slot.lights.block);
         slot.serial = serial;
-        return slot.set;
-    }
-
-    VkDescriptorSet OffSet(uint32_t slotIndex)
-    {
-        return s.ready && slotIndex < kSlots ? s.slots[slotIndex].off : VK_NULL_HANDLE;
+        return slot.sets[surface];
     }
 
     void Shutdown()
@@ -225,6 +235,7 @@ namespace gxvk::vk::lights
             memory::DestroyBuffer(slot.cells);
         }
         memory::DestroyBuffer(s.offBuffer);
+        memory::DestroyBuffer(s.classes);
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);
         if (s.setLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.setLayout, nullptr);
         const Provider provider = s.provider;

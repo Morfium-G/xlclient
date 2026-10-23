@@ -19,6 +19,7 @@
 #include "Engine/Source/Tempest/C4Vector.h"
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CImVector.h"
+#include "SXC/Lights/Lights.h"  // SXC: which of our lights a model takes
 
 // STATIC: 0x00A45390
 const uint32_t s_fogModes[7] = { 1, 1, 1, 2, 2, 3, 4 };
@@ -616,10 +617,23 @@ void CM2SceneRender::DrawBatchDoodad(M2Element* elements, uint32_t* indices) {
 
     if (CShaderEffect::s_enableShaders) {
         this->m_curShared->SetVertices(0);
+        const uint32_t most = instances;
 
         for (uint32_t done = 0; done < total; done += instances) {
-            if (done + instances > total) {
-                instances = total - done;
+            instances = done + most > total ? total - done : most;
+
+            // SXC: a run of instances on the same side (inside / outside a WMO), so each draw takes the
+            // right lights (step 6c).
+            {
+                const SXC::Lights::Surface side = SXC::Lights::ModelSurface(elements[indices[done]].m_model);
+                uint32_t same = 1;
+
+                while (same < instances && SXC::Lights::ModelSurface(elements[indices[done + same]].m_model) == side) {
+                    same++;
+                }
+
+                instances = same;
+                SXC::Lights::SetDrawModel(elements[indices[done]].m_model);
             }
 
             float* constants = g_theGxDevicePtr->ShaderConstantsLock(GxSh_Vertex) + 31 * 4;
@@ -986,6 +1000,7 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
         this->m_curMaterial = &this->m_defaultMaterial;
         this->m_data = this->m_curShared->m_data;
         this->m_cache->LinkToSharedUpdateList(this->m_curShared);
+        SXC::Lights::SetDrawModel(this->m_curModel);  // SXC: which of our lights it takes (inside / outside)
 
         switch (this->m_curElement->m_type) {
             case 0:
@@ -1022,6 +1037,8 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
         this->m_prevSkinSection = this->m_curSkinSection;
         this->m_prevMaterial = this->m_curMaterial;
     }
+
+    SXC::Lights::SetDrawModel(nullptr);  // SXC:
 
     for (uint32_t xf = GxXform_Tex0; xf <= GxXform_World; xf++) {
         CGxMatrixStack& stack = g_theGxDevicePtr->m_xforms[xf];

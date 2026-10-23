@@ -38,6 +38,13 @@ layout(std430, set = 3, binding = 1) readonly buffer LightCells {
     uint cellLights[];    // per cell (y * cells + x): light indices, 0xFFFFFFFF ends a list
 };
 
+// The draw's surfaces (step 6c, the device binds a set per class): x 0 any (models: every light),
+// 1 outdoor (the terrain, outdoor WMO groups: the lights outside), 2 indoor (indoor WMO groups: the
+// lights inside an indoor group; a light's extra.y is 1 there).
+layout(std140, set = 3, binding = 2) uniform LightSurface {
+    vec4 lightSurface;
+};
+
 const int kMaxLightsPerCell = 32;
 
 bool LightsOn() { return lightInfo.z > 0.5; }
@@ -64,6 +71,7 @@ vec3 LightsAt(vec3 p, vec3 n, out int count)
 
     int first = LightCellFirst(p.xy);
     int perCell = int(lightInfo.x + 0.5);
+    int surface = int(lightSurface.x + 0.5);
 
     for (int k = 0; k < kMaxLightsPerCell; k++)
     {
@@ -80,6 +88,13 @@ vec3 LightsAt(vec3 p, vec3 n, out int count)
         }
 
         Light l = lights[index];
+
+        // Inside and outside apart: a light lights its own side's surfaces only (models both).
+        if (surface != 0 && (l.extra.y > 0.5 ? 2 : 1) != surface)
+        {
+            continue;
+        }
+
         vec3 toLight = l.posInvRadius.xyz - p;
         float d2 = dot(toLight, toLight);
         float d = sqrt(d2);

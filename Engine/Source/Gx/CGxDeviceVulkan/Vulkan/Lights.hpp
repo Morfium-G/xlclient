@@ -36,12 +36,19 @@ namespace gxvk::vk::lights
     /// The set's layout (null before Init()).
     VkDescriptorSetLayout SetLayout();
 
-    /// This frame's set for slot `slot`: filled at the first call of the frame. Null when not ready.
-    VkDescriptorSet FrameSet(uint32_t slot, uint64_t serial);
+    /// Which lights a draw's surfaces take (binding 2's class; SXC::Lights::Surface).
+    enum Surface : uint32_t
+    {
+        kSurfaceAny = 0,      ///< every light (models)
+        kSurfaceOutdoor = 1,  ///< the lights outside (the terrain, outdoor WMO groups)
+        kSurfaceIndoor = 2,   ///< the lights inside (indoor WMO groups)
+        kSurfaceOff = 3,      ///< none: draws outside the world scene (portraits: another view)
+        kSurfaceCount = 4,
+    };
 
-    /// A set with the lights off, for draws outside the world scene (portraits, the character screen:
-    /// another view, so the world's lights would land in the wrong places).
-    VkDescriptorSet OffSet(uint32_t slot);
+    /// This frame's set for slot `slot` and a surface class: the lights filled at the first call of
+    /// the frame. Null when not ready.
+    VkDescriptorSet FrameSet(uint32_t slot, uint64_t serial, uint32_t surface = kSurfaceAny);
 
     const char* Status();
 

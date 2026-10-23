@@ -21,6 +21,9 @@
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "WoW/Source/WorldClient/Map.h"
+#include "WoW/Source/WorldClient/MapChunk.h"
+#include "WoW/Source/WorldClient/MapObjDef.h"
 #include "WoW/Source/WorldClient/World.h"
 
 namespace {
@@ -516,6 +519,78 @@ namespace {
         }
     }
 
+    // --- inside or outside ---------------------------------------------------------------------------
+    // Whether a point lies in an indoor WMO group: the client's own viewer locate, as CWorldScene::
+    // LocateViewer3 calls it (a segment straight down, cut where it meets the terrain; true: the first
+    // group below is an interior one). Cached per half yard; answers expire after 5-7 s, and at most
+    // kTestsPerFrame new tests run per frame (the old answer, or outside, stands past that). WXL's
+    // lights::IsIndoor.
+    struct IndoorAnswer {
+        bool indoor = false;
+        uint32_t expires = 0;
+    };
+    std::unordered_map<uint64_t, IndoorAnswer> s_indoor;
+    constexpr uint32_t kTestsPerFrame = 48;
+
+    // `budgeted`: the lights' 48 a frame apply (the models count their own).
+    bool IsIndoor(const C3Vector& p, uint32_t nowMs, bool budgeted = true) {
+        const auto q = [](float v) { return static_cast<uint64_t>(static_cast<int64_t>(std::floor(v * 2.0f)) + 1048576) & 0x1FFFFF; };
+        const uint64_t key = q(p.x) | (q(p.y) << 21) | (q(p.z) << 42);
+        auto it = s_indoor.find(key);
+
+        if (it != s_indoor.end() && it->second.expires > nowMs) {
+            return it->second.indoor;
+        }
+
+        if (budgeted && s_stats.indoor_tests >= kTestsPerFrame) {
+            return it != s_indoor.end() && it->second.indoor;
+        }
+
+        s_stats.indoor_tests += budgeted ? 1 : 0;
+
+        if (s_indoor.size() > 16384) {
+            s_indoor.clear();
+        }
+
+        C3Vector start = p;
+        C3Vector end(p.x, p.y, p.z - 1760.0f);
+        float dist = 1.0f;
+        CMapChunk* chunk = nullptr;
+        CMap::VectorIntersectTerrain(&start, &end, &dist, 0x100, &chunk);
+        CMapObjDef* defs[2] = {};
+        uint32_t groups[4] = {};
+        IndoorAnswer& a = s_indoor[key];
+        a.indoor = CMap::LocateViewerMapObjs(start, end, dist, defs, groups);
+        a.expires = nowMs + 5000 + static_cast<uint32_t>(key % 2000);
+        return a.indoor;
+    }
+
+    int s_groupDepth = 0;
+    bool s_groupIndoor = false;
+
+    // A model's side, located at its root's origin (a little above it: the floor it stands on is below),
+    // cached per model; re-located when it moved more than kMoved yd, or after 3-5 s; at most
+    // kModelTestsPerFrame a frame (a model not located yet takes every light: as before the test).
+    struct ModelAnswer {
+        C3Vector at;
+        Surface surface = kSurfaceAny;
+        uint32_t expires = 0;
+    };
+    std::unordered_map<const CM2Model*, ModelAnswer> s_models;
+    constexpr uint32_t kModelTestsPerFrame = 128;
+    constexpr float kMoved = 1.0f;
+    const CM2Model* s_drawModel = nullptr;
+
+    C3Vector RootOrigin(const CM2Model* model) {
+        int guard = 0;
+
+        while (model->m_attachParent && guard++ < 16) {
+            model = model->m_attachParent;
+        }
+
+        return C3Vector(model->m_worldTransform.d0, model->m_worldTransform.d1, model->m_worldTransform.d2);
+    }
+
     // --- the service -------------------------------------------------------------------------------
     wxl_bool WXL_CALL Available() { return s_available ? WXL_TRUE : WXL_FALSE; }
 
@@ -551,10 +626,10 @@ namespace {
         std::snprintf(s_status, sizeof(s_status),
                       "%u models; their own point lights %u (%u placed by the client this frame; left out on %u models by the table); "
                       "%u table lights (%u at the model's origin: attachment missing)\n"
-                      "%u in range, %u merged, %u drawn%s; grid %u x %u cells of %.0f yd, busiest cell %u lights, %u cells over their limit; "
+                      "%u in range, %u merged, %u drawn%s (%u indoors); grid %u x %u cells of %.0f yd, busiest cell %u lights, %u cells over their limit; "
                       "stock terrain lights %s",
                       s_stats.models, s_stats.model_lights, s_stats.placed, s_stats.suppressed, s_stats.table_lights, s_stats.attach_missing,
-                      s_stats.in_range, s_stats.merged, s_stats.active, s_stats.dropped ? " (the farthest left out: more than 512)" : "", s_stats.cells,
+                      s_stats.in_range, s_stats.merged, s_stats.active, s_stats.dropped ? " (the farthest left out: more than 512)" : "", s_stats.indoor, s_stats.cells,
                       s_stats.cells, s_frame.cellSize, s_stats.busiest_cell, s_stats.full_cells, StockTerrainOff() ? "off" : "on");
         return s_status;
     }
@@ -619,6 +694,62 @@ namespace SXC::Lights {
         return s_otherScenes == 0;
     }
 
+    void SetDrawModel(const CM2Model* model) {
+        s_drawModel = model;
+    }
+
+    Surface ModelSurface(const CM2Model* model) {
+        if (!model || !s_settings.separate_indoor || !Settled()) {
+            return kSurfaceAny;
+        }
+
+        // The budget is per frame (the frame's numbers start over in Current()).
+        const uint32_t now = OsGetAsyncTimeMs();
+
+        if (s_models.size() > 32768) {
+            s_models.clear();
+        }
+
+        const C3Vector at = RootOrigin(model);
+        ModelAnswer& a = s_models[model];
+        const C3Vector d = at - a.at;
+        const bool stale = a.expires <= now || d.x * d.x + d.y * d.y + d.z * d.z > kMoved * kMoved;
+
+        if (stale && s_stats.model_tests < kModelTestsPerFrame && std::isfinite(at.x) && std::isfinite(at.y) && std::isfinite(at.z)) {
+            s_stats.model_tests++;
+            a.at = at;
+            a.surface = IsIndoor(C3Vector(at.x, at.y, at.z + 0.5f), now, false) ? kSurfaceIndoor : kSurfaceOutdoor;
+            a.expires = now + 3000 + static_cast<uint32_t>(reinterpret_cast<uintptr_t>(model) % 2000);
+        }
+
+        return a.surface;
+    }
+
+    void GroupDrawBegin(bool indoor) {
+        s_groupDepth++;
+        s_groupIndoor = indoor;
+    }
+
+    void GroupDrawEnd() {
+        s_groupDepth -= s_groupDepth > 0 ? 1 : 0;
+    }
+
+    Surface DrawSurface() {
+        if (s_otherScenes) {
+            return kSurfaceOff;
+        }
+
+        if (!s_settings.separate_indoor) {
+            return kSurfaceAny;
+        }
+
+        if (s_groupDepth) {
+            return s_groupIndoor ? kSurfaceIndoor : kSurfaceOutdoor;
+        }
+
+        return s_drawModel ? ModelSurface(s_drawModel) : kSurfaceAny;
+    }
+
     const Frame& Current() {
         const uint32_t size = s_stats.struct_size;
         s_stats = sxc_lights_stats{};
@@ -665,7 +796,8 @@ namespace SXC::Lights {
             std::sort(order.begin(), order.end(), [](const std::pair<float, uint32_t>& a, const std::pair<float, uint32_t>& b) { return a.second < b.second; });
         }
 
-        const double now = static_cast<double>(OsGetAsyncTimeMs()) * 0.001;
+        const uint32_t nowMs = OsGetAsyncTimeMs();
+        const double now = static_cast<double>(nowMs) * 0.001;
         const float fadeStart = range * (2.0f / 3.0f);
 
         for (const std::pair<float, uint32_t>& o : order) {
@@ -694,6 +826,12 @@ namespace SXC::Lights {
             l.spotDir[2] = f.spotDir.z;
             l.cosOuter = f.cosOuter;
             l.spotScale = f.spotScale;
+
+            if (set.separate_indoor && IsIndoor(f.pos, nowMs)) {
+                l.flags = kLightIndoor;
+                s_stats.indoor++;
+            }
+
             s_lights.push_back(l);
             s_strength.push_back((f.color.x + f.color.y + f.color.z) * set.brightness);
         }

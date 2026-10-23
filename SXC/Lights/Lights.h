@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+class CM2Model;
 class CM2Scene;
 
 // SXC's point lights (port plan step 6): the sxc.lights service (SXC/Api/sxc_lights.h) holds what a mod
@@ -27,6 +28,15 @@ namespace SXC::Lights {
         float pad[2];
     };
     static_assert(sizeof(GpuLight) == 64, "the shaders read a light as four vec4");
+    constexpr float kLightIndoor = 1.0f;   // GpuLight::flags: inside an indoor WMO group
+
+    // Which lights a draw's surfaces take (the device binds a set per class).
+    enum Surface : uint32_t {
+        kSurfaceAny = 0,      // models: every light
+        kSurfaceOutdoor = 1,  // the terrain, outdoor WMO groups: the lights outside
+        kSurfaceIndoor = 2,   // indoor WMO groups: the lights inside
+        kSurfaceOff = 3,      // another scene than the world's: none
+    };
 
     // What the device reads per frame (pointers valid until the next Current()).
     struct Frame {
@@ -57,4 +67,18 @@ namespace SXC::Lights {
     void SceneDrawBegin(const CM2Scene* scene);
     void SceneDrawEnd(const CM2Scene* scene);
     bool WorldDrawing();
+
+    // The seam in CMapObj::RenderGroup: a WMO group's surfaces are indoor (MOGP 0x2000) or outdoor while
+    // it draws. Main thread.
+    void GroupDrawBegin(bool indoor);
+    void GroupDrawEnd();
+
+    // The seam in CM2SceneRender: the model being drawn (null: none). Its side is located like a light's
+    // (cached per model, re-located when it moves or every few seconds).
+    void SetDrawModel(const CM2Model* model);
+    Surface ModelSurface(const CM2Model* model);
+
+    // The class of the draw being made now: a WMO group's side, else the model's being drawn, else any;
+    // kSurfaceOff outside the world's scene; with the indoor test off, any.
+    Surface DrawSurface();
 }

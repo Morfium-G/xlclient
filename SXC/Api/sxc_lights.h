@@ -37,6 +37,9 @@ typedef struct sxc_lights_settings
     float    merge_distance;  ///< yd: closer lights merge into one (torch groups)
     float    flicker;         ///< 0..1: how much a flame dips (each light its own phase)
     float    flicker_speed;   ///< x the default pace (~3 dips a second)
+    /// Inside and outside apart: a light inside an indoor WMO group lights only indoor surfaces (indoor
+    /// WMO groups), one outside only outdoor ones (the terrain, outdoor groups); models take both.
+    wxl_bool separate_indoor;
 } sxc_lights_settings;
 
 /// What a light is (a DoodadLightProperties row). Negative values (and flicker_mode -1) take the
@@ -101,6 +104,9 @@ typedef struct sxc_lights_stats
     uint32_t suppressed;      ///< models whose own lights an assignment left out
     uint32_t attach_missing;  ///< assignments whose attachment the model doesn't have (placed at its origin)
     uint32_t dropped;         ///< lights past SXC_LIGHTS_MAX_POOL (the farthest)
+    uint32_t indoor;          ///< drawn lights inside an indoor WMO group
+    uint32_t indoor_tests;    ///< points located this frame (the rest from the cache)
+    uint32_t model_tests;     ///< models located this frame (for which lights they take)
 } sxc_lights_stats;
 
 typedef struct sxc_lights_api

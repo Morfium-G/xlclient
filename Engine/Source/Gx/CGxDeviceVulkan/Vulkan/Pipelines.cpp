@@ -254,10 +254,11 @@ namespace gxvk::vk::pipelines
 
         // SXC: set 2, the covers' (written and uploaded at the frame's first terrain draw).
         const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial) : VK_NULL_HANDLE;
-        // SXC: set 3, the lights' (filled at the frame's first use); the lights off for a model of another
-        // scene than the world's (portraits).
-        const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial)
-                                     : lit ? (draw.lightsOff ? gxvk::vk::lights::OffSet(slot) : gxvk::vk::lights::FrameSet(slot, serial))
+        // SXC: set 3, the lights' (filled at the frame's first use), for the draw's surface class: the
+        // terrain outdoor; a lit module as the device found it (a WMO group indoor or outdoor, models
+        // any, another scene than the world's none).
+        const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial, gxvk::vk::lights::kSurfaceOutdoor)
+                                     : lit ? gxvk::vk::lights::FrameSet(slot, serial, draw.lightsSurface)
                                            : VK_NULL_HANDLE;
         if ((cover && set2 == VK_NULL_HANDLE) || ((cover || lit) && set3 == VK_NULL_HANDLE))
         {
