@@ -61,7 +61,7 @@ SWZ = ir.SWZ
 # to their lit colour input (color0) and carry `flag lights`; the device binds the lights' set then.
 SXC_VIEW_LOCATION, SXC_NORMAL_LOCATION = 11, 12
 SXC_LIT_VERTEX = ('Diffuse_', 'Color_', 'CDiffuse_', 'MapObj')
-SXC_LIT_PIXEL = ('Combiners_', 'MapObj')
+SXC_LIT_PIXEL = ('Combiners_', 'MapObj', 'DetailDoodad')   # DetailDoodad: the instanced grass (step 7c) writes the view position and normal
 SXC_PROJECTION = (2, 3, 4, 5)
 SXC_SUN = 12
 SXC_LIGHTS_GLSL = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
@@ -976,12 +976,21 @@ def grass_instanced_module(em, glsl):
     """The variant; step 7b adds the wind and parting (GrassMotion.glsl, inlined) on the placed position."""
     pos = [nm for nm, sem in em.inputs.items() if sem == 'position0']
     tex = [nm for nm, sem in em.inputs.items() if sem == 'texcoord0']
-    if len(pos) != 1 or len(tex) != 1:
-        raise Refused('grass: no single position or texcoord0 input')
+    nrm = [nm for nm, sem in em.inputs.items() if sem == 'normal0']
+    if len(pos) != 1 or len(tex) != 1 or len(nrm) != 1:
+        raise Refused('grass: no single position, normal0 or texcoord0 input')
     decl = 'layout(location = 0) in vec4 %s;' % pos[0]
     regs = 'vec4 v[%d];' % em.vconst
-    if glsl.count(decl) != 1 or glsl.count('void main()\n{\n') != 1 or glsl.count(regs) != 1:
+    varyings = '    sxcView = vec4(0.0);\n    sxcNormal = vec4(0.0);\n'
+    if glsl.count(decl) != 1 or glsl.count('void main()\n{\n') != 1 or glsl.count(regs) != 1 or glsl.count(varyings) != 1:
         raise Refused('grass: unexpected module text')
+    # Step 7c: our lights on grass. The view position (of the bent blade) and normal as the stock shader
+    # computes them (c0..c3 the world view: the position through all four, the normal through c0..c2).
+    glsl = glsl.replace(varyings,
+                        '    // SXC: the view position and normal for our lights (step 7c), as the stock record lights the blade.\n'
+                        '    sxcView = vec4((%(p)s.x * regs.v[0] + %(p)s.y * regs.v[1] + %(p)s.z * regs.v[2] + regs.v[3]).xyz, 1.0);\n'
+                        '    sxcNormal = vec4(%(n)s.x * regs.v[0].xyz + %(n)s.y * regs.v[1].xyz + %(n)s.z * regs.v[2].xyz, 1.0);\n'
+                        % {'p': pos[0], 'n': nrm[0]})
     try:
         with open(SXC_GRASS_MOTION_GLSL, 'r', encoding='utf-8') as f:
             motion = f.read()
