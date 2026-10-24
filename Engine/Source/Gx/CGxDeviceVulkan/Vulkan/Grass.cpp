@@ -43,7 +43,7 @@ namespace
     {
         bool           ready  = false;
         bool           failed = false;
-        memory::Buffer vertices, indices, plants;
+        memory::Buffer vertices, indices, plants, copies;
         uint32_t       vertexUsed = 0, indexUsed = 0;
         std::unordered_map<uint32_t, MeshPlace> meshes;
         std::vector<Range>   free;       ///< sorted by first, merged
@@ -76,6 +76,7 @@ namespace gxvk::vk::grass
     VkBuffer MeshVertices() { return s.vertices.handle; }
     VkBuffer MeshIndices() { return s.indices.handle; }
     VkBuffer Plants() { return s.plants.handle; }
+    VkBuffer Copies() { return s.copies.handle; }
     uint32_t PlantsInUse() { return s.inUse; }
 
     bool Init()
@@ -87,15 +88,25 @@ namespace gxvk::vk::grass
             || !memory::CreateBuffer(static_cast<VkDeviceSize>(kMaxIndices) * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, memory::Where::Stream, s.indices)
             || !s.indices.block.mapped
             || !memory::CreateBuffer(static_cast<VkDeviceSize>(kMaxPlants) * kPlantBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, memory::Where::Stream, s.plants)
-            || !s.plants.block.mapped)
+            || !s.plants.block.mapped
+            || !memory::CreateBuffer(static_cast<VkDeviceSize>(kMaxCopies + 1) * 16u, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, memory::Where::Stream, s.copies)
+            || !s.copies.block.mapped)
         {
             Write(Error, "vulkan: grass: no buffers for the instanced grass");
             memory::DestroyBuffer(s.vertices);
             memory::DestroyBuffer(s.indices);
             memory::DestroyBuffer(s.plants);
+            memory::DestroyBuffer(s.copies);
             s.failed = true;
             return false;
         }
+        float* copy = static_cast<float*>(s.copies.block.mapped);
+        for (uint32_t k = 0; k <= kMaxCopies; ++k)
+        {
+            copy[4 * k + 0] = static_cast<float>(k);
+            copy[4 * k + 1] = copy[4 * k + 2] = copy[4 * k + 3] = 0.0f;
+        }
+        memory::FlushHost(s.copies.block);
         s.free.assign(1, Range{ 0, kMaxPlants });
         s.ready = true;
         Write(Info, "vulkan: grass: ready (%u plants, %u model vertices)", kMaxPlants, kMaxVertices);
@@ -183,6 +194,7 @@ namespace gxvk::vk::grass
         memory::DestroyBuffer(s.vertices);
         memory::DestroyBuffer(s.indices);
         memory::DestroyBuffer(s.plants);
+        memory::DestroyBuffer(s.copies);
         s = State();
     }
 }

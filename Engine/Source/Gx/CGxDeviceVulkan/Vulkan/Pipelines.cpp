@@ -221,6 +221,7 @@ namespace gxvk::vk::pipelines
         k.terrainFragment = draw.fragment == FragmentProgram::Terrain ? draw.terrainFragment : 0u;
         k.instanceStreams = draw.instanceStreams;   // SXC: the instanced grass
         k.plantStream     = draw.plantStream >= 0 ? static_cast<uint32_t>(draw.plantStream) + 1u : 0u;
+        k.copyStream      = draw.copyStream >= 0 ? static_cast<uint32_t>(draw.copyStream) + 1u : 0u;
 
         const Entry* entry = Lookup(k);
         if (!entry || entry->pipeline == VK_NULL_HANDLE)
@@ -396,12 +397,24 @@ namespace gxvk::vk::pipelines
             }
             if (draw.runs)
             {
-                // SXC: the instanced grass's runs, one bind for all of them.
+                // SXC: the instanced grass's runs, one bind for all of them; step 7d: a run of copies
+                // moves the copy stream to its entry.
+                const bool copies = draw.copyStream >= 0 && static_cast<uint32_t>(draw.copyStream) < draw.streamCount;
                 for (uint32_t r = 0; r < draw.runCount; ++r)
                 {
                     const Run& run = draw.runs[r];
-                    if (run.indexCount && run.instanceCount)
-                        d.CmdDrawIndexed(cmd, run.indexCount, run.instanceCount, run.firstIndex, run.vertexOffset, run.firstInstance);
+                    if (!run.indexCount || !run.instanceCount) continue;
+                    if (copies)
+                    {
+                        const uint32_t      slot   = static_cast<uint32_t>(draw.copyStream);
+                        const VkDeviceSize  offset = draw.streams[slot].offset + static_cast<VkDeviceSize>(run.copy) * 16u;
+                        if (b.offsets[slot] != offset)
+                        {
+                            d.CmdBindVertexBuffers(cmd, slot, 1, &draw.streams[slot].buffer, &offset);
+                            b.offsets[slot] = offset;
+                        }
+                    }
+                    d.CmdDrawIndexed(cmd, run.indexCount, run.instanceCount, run.firstIndex, run.vertexOffset, run.firstInstance);
                 }
             }
             else

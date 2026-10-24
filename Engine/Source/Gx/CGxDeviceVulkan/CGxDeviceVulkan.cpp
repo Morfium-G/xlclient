@@ -288,16 +288,18 @@ bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs,
     }
 
     gxvk::vk::pipelines::Draw d;
-    d.streamCount = 2;
+    d.streamCount = 3;
     d.streams[0] = { gxvk::vk::grass::MeshVertices(), 0, gxvk::vk::grass::kVertexBytes };
     d.streams[1] = { gxvk::vk::grass::Plants(), 0, gxvk::vk::grass::kPlantBytes };
+    d.streams[2] = { gxvk::vk::grass::Copies(), 0, 0 };   // step 7d: the copy number, at stride 0 (each run binds its entry)
     d.attribs[GxVA_Position] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT };
     d.attribs[GxVA_TexCoord0] = { 0, 12, VK_FORMAT_R32G32_SFLOAT };
     d.attribs[GxVA_Normal] = { 1, 48, VK_FORMAT_R32G32B32_SFLOAT };
     d.attribs[GxVA_Color0] = { 1, 60, VK_FORMAT_B8G8R8A8_UNORM };
     d.attribMask = (1u << GxVA_Position) | (1u << GxVA_TexCoord0) | (1u << GxVA_Normal) | (1u << GxVA_Color0);
-    d.instanceStreams = 1u << 1;
+    d.instanceStreams = (1u << 1) | (1u << 2);
     d.plantStream = 1;
+    d.copyStream = 2;
     d.indexed = true;
     d.indexBuffer = gxvk::vk::grass::MeshIndices();
     d.topology = GxPrim_Triangles;

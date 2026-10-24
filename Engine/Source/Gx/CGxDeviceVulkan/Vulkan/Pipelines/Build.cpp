@@ -158,7 +158,7 @@ namespace
 
     struct VertexInput
     {
-        VkVertexInputAttributeDescription attrs[kAttribCount + 2];
+        VkVertexInputAttributeDescription attrs[kAttribCount + 8];   // SXC: the grass variant's seven extra
         uint32_t                          count     = 0;
         bool                              needConst = false;   ///< the constant stream is read
     };
@@ -287,6 +287,28 @@ namespace
                     m.binding  = k.plantStream - 1;
                     m.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
                     m.offset   = 64;
+                    // Step 7d: the plant's density (copies, radius, spread as halves), its spot in its
+                    // terrain cell, and the copy number (GrassDensity.glsl).
+                    if (!k.copyStream)
+                    {
+                        why = "the grass variant needs the copy stream";
+                        return false;
+                    }
+                    VkVertexInputAttributeDescription& density = in.attrs[in.count++];
+                    density.location = 6;
+                    density.binding  = k.plantStream - 1;
+                    density.format   = VK_FORMAT_R16G16B16A16_SFLOAT;
+                    density.offset   = 80;
+                    VkVertexInputAttributeDescription& cell = in.attrs[in.count++];
+                    cell.location = 7;
+                    cell.binding  = k.plantStream - 1;
+                    cell.format   = VK_FORMAT_R32G32_SFLOAT;
+                    cell.offset   = 88;
+                    VkVertexInputAttributeDescription& copy = in.attrs[in.count++];
+                    copy.location = 8;
+                    copy.binding  = k.copyStream - 1;
+                    copy.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+                    copy.offset   = 0;
                 }
                 return true;
             }

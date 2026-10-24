@@ -442,12 +442,74 @@ void CDetailDoodadInstBatch::FillVertices() {
 // space plus the chunk's corner), the normal, the colour's four bytes. The same math in the same order,
 // so the plants land exactly where the stock bake puts their vertices (the terrain-aligned plants of a
 // cell's fan share the first one's matrix, as stock does).
-void SxcGrassPlants(CDetailDoodadInstBatch& batch, const C3Vector& origin, float* out) {
+// A terrain-aligned plant's matrix (FillVertices' basis from the normal, turned by the plant's rotation).
+static void SxcGrassTilt(const CDetailDoodadInstAdd& add, C33Matrix& out) {
     C3Vector axis(0.0f, 0.0f, 1.0f);
-    C33Matrix basis(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    C33Matrix rotation(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    const C3Vector& normal = add.m_normal;
+    float inv = 1.0f / sqrt(-normal.y * -normal.y + normal.z * normal.z);
+    C3Vector tangent(0.0f * inv, normal.z * inv, -normal.y * inv);
+    C3Vector binormal(normal.y * tangent.z - normal.z * tangent.y, normal.z * tangent.x - tangent.z * normal.x, tangent.y * normal.x - tangent.x * normal.y);
+    C33Matrix basis(binormal.x, binormal.y, binormal.z, tangent.x, tangent.y, tangent.z, normal.x, normal.y, normal.z);
+    BuildInstanceMatrix(out, rotation, basis, add.m_rotation, axis);
+}
+
+// One plant's record; `tilt` is the matrix of a terrain-aligned one.
+static void SxcGrassRecord(const CDetailDoodadInstAdd& add, const C3Vector& origin, const C33Matrix& tilt, float* out) {
+    const CDetailDoodadData* data = CDetailDoodad::s_doodadList[add.m_doodadId];
+    CImVector color = add.m_color;
+
+    if (!CDetailDoodad::s_bUseShaders) {
+        uint32_t scale = 76 * color.a + 45874;
+        color.r = static_cast<uint8_t>((scale * color.r) >> 16);
+        color.g = static_cast<uint8_t>((scale * color.g) >> 16);
+        color.b = static_cast<uint8_t>((scale * color.b) >> 16);
+        color.a = 0xFF;
+    }
+
+    if (g_theGxDevicePtr->Caps().m_colorFormat == GxCF_rgba) {
+        CImVector swapped;
+        swapped.a = color.a;
+        swapped.g = color.g;
+        swapped.r = color.b;
+        swapped.b = color.r;
+        color = swapped;
+    }
+
+    const float px = add.m_position.x + origin.x, py = add.m_position.y + origin.y, pz = add.m_position.z + origin.z;
+    const float sc = add.m_scale;
+
+    if (data && (data->m_record->m_flags & 1)) {
+        // position = source * matrix (a row vector): x = sx a0 + sy b0 + sz c0, and so on.
+        const C33Matrix& m = tilt;
+        const float rows[12] = { m.a0 * sc, m.b0 * sc, m.c0 * sc, px, m.a1 * sc, m.b1 * sc, m.c1 * sc, py, m.a2 * sc, m.b2 * sc, m.c2 * sc, pz };
+        memcpy(out, rows, sizeof(rows));
+    } else {
+        const float c = cos(add.m_rotation), s = sin(add.m_rotation);
+        const float rows[12] = { c * sc, -s * sc, 0.0f, px, s * sc, c * sc, 0.0f, py, 0.0f, 0.0f, sc, pz };
+        memcpy(out, rows, sizeof(rows));
+    }
+
+    out[12] = add.m_normal.x;
+    out[13] = add.m_normal.y;
+    out[14] = add.m_normal.z;
+    memcpy(&out[15], &color, sizeof(color));
+}
+
+void SxcGrassPlant(const CDetailDoodadInstAdd& add, const C3Vector& origin, float* out) {
+    C33Matrix tilt(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+    const CDetailDoodadData* data = CDetailDoodad::s_doodadList[add.m_doodadId];
+
+    if (data && (data->m_record->m_flags & 1)) {
+        SxcGrassTilt(add, tilt);
+    }
+
+    SxcGrassRecord(add, origin, tilt, out);
+}
+
+void SxcGrassPlants(CDetailDoodadInstBatch& batch, const C3Vector& origin, float* out) {
     uint8_t built = 0;
     uint32_t cell = 0xFFFF;
-    C33Matrix rotation(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
     C33Matrix matrices[4] = {
         C33Matrix(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f),
         C33Matrix(1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f),
@@ -458,27 +520,7 @@ void SxcGrassPlants(CDetailDoodadInstBatch& batch, const C3Vector& origin, float
     for (uint32_t i = 0; i < batch.m_adds.Count(); i++, out += 16) {
         CDetailDoodadInstAdd& add = batch.m_adds[i];
         const CDetailDoodadData* data = CDetailDoodad::s_doodadList[add.m_doodadId];
-        CImVector color = add.m_color;
-
-        if (!CDetailDoodad::s_bUseShaders) {
-            uint32_t scale = 76 * color.a + 45874;
-            color.r = static_cast<uint8_t>((scale * color.r) >> 16);
-            color.g = static_cast<uint8_t>((scale * color.g) >> 16);
-            color.b = static_cast<uint8_t>((scale * color.b) >> 16);
-            color.a = 0xFF;
-        }
-
-        if (g_theGxDevicePtr->Caps().m_colorFormat == GxCF_rgba) {
-            CImVector swapped;
-            swapped.a = color.a;
-            swapped.g = color.g;
-            swapped.r = color.b;
-            swapped.b = color.r;
-            color = swapped;
-        }
-
-        const float px = add.m_position.x + origin.x, py = add.m_position.y + origin.y, pz = add.m_position.z + origin.z;
-        const float sc = add.m_scale;
+        uint32_t fan = 0;
 
         if (data && (data->m_record->m_flags & 1)) {
             if ((add.m_triIndex & 0xFC) != cell) {
@@ -486,32 +528,15 @@ void SxcGrassPlants(CDetailDoodadInstBatch& batch, const C3Vector& origin, float
                 built = 0;
             }
 
-            uint32_t fan = add.m_triIndex & 3;
+            fan = add.m_triIndex & 3;
 
             if (!(built & (1 << fan))) {
-                const C3Vector& normal = add.m_normal;
-                float inv = 1.0f / sqrt(-normal.y * -normal.y + normal.z * normal.z);
-                C3Vector tangent(0.0f * inv, normal.z * inv, -normal.y * inv);
-                C3Vector binormal(normal.y * tangent.z - normal.z * tangent.y, normal.z * tangent.x - tangent.z * normal.x, tangent.y * normal.x - tangent.x * normal.y);
-                basis = C33Matrix(binormal.x, binormal.y, binormal.z, tangent.x, tangent.y, tangent.z, normal.x, normal.y, normal.z);
-                BuildInstanceMatrix(matrices[fan], rotation, basis, add.m_rotation, axis);
+                SxcGrassTilt(add, matrices[fan]);
                 built |= 1 << fan;
             }
-
-            // position = source * matrix (a row vector): x = sx a0 + sy b0 + sz c0, and so on.
-            const C33Matrix& m = matrices[fan];
-            const float rows[12] = { m.a0 * sc, m.b0 * sc, m.c0 * sc, px, m.a1 * sc, m.b1 * sc, m.c1 * sc, py, m.a2 * sc, m.b2 * sc, m.c2 * sc, pz };
-            memcpy(out, rows, sizeof(rows));
-        } else {
-            const float c = cos(add.m_rotation), s = sin(add.m_rotation);
-            const float rows[12] = { c * sc, -s * sc, 0.0f, px, s * sc, c * sc, 0.0f, py, 0.0f, 0.0f, sc, pz };
-            memcpy(out, rows, sizeof(rows));
         }
 
-        out[12] = add.m_normal.x;
-        out[13] = add.m_normal.y;
-        out[14] = add.m_normal.z;
-        memcpy(&out[15], &color, sizeof(color));
+        SxcGrassRecord(add, origin, matrices[fan], out);
     }
 }
 

@@ -141,6 +141,7 @@ namespace gxvk::vk::pipelines::detail
         uint32_t     terrainFragment; ///< SXC: FragmentProgram::Terrain's options, else 0
         uint32_t     instanceStreams; ///< SXC: streams fed per instance (instanced grass)
         uint32_t     plantStream;     ///< SXC: the plant rows' stream + 1; 0 none
+        uint32_t     copyStream;      ///< SXC: the grass copies' number stream + 1; 0 none
     };
 
     struct Entry

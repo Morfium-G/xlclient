@@ -300,7 +300,9 @@ namespace {
         }
 
         s_stats.models++;
-        const M2Data* data = model->m_shared ? model->m_shared->m_data : nullptr;
+        // Only a loaded model: one still loading can have its data's header but not its arrays (a crash
+        // reading an emitter's position, 2026-10-24).
+        const M2Data* data = model->m_shared && model->IsLoaded(0, 0) ? model->m_shared->m_data : nullptr;
 
         if (data) {
             const Placement at{ scene, model, model->m_frameStamp == scene->m_frameStamp };
@@ -1241,7 +1243,7 @@ namespace {
             return;
         }
 
-        if (model->m_shared && model->m_shared->m_data) {
+        if (model->m_shared && model->m_shared->m_data && model->IsLoaded(0, 0)) {   // as Visit: loaded models only
             const Placement at{ scene, model, model->m_frameStamp == scene->m_frameStamp };
             C3Vector p;
             float scale = 1.0f;

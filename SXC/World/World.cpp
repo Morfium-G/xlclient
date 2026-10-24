@@ -636,6 +636,34 @@ namespace {
 }
 
 namespace SXC::WorldApi {
+    bool GroundHeight(float x, float y, float& z) {
+        return TerrainHeight(x, y, &z) != WXL_FALSE;
+    }
+
+    int32_t LayerWeights(float x, float y, float* out, int32_t max) {
+        Spot at;
+
+        if (!out || max <= 0 || !FindSpot(x, y, at) || IsHole(at)) {
+            return 0;
+        }
+
+        const DecodedChunk& d = Decoded(at);
+        const int32_t count = d.count < max ? d.count : max;
+        const float u = at.r * 8.0f - 0.5f, v = at.c * 8.0f - 0.5f;   // as TerrainSample
+        float rest = 1.0f;
+
+        for (int32_t l = 1; l < count; l++) {
+            out[l] = Texel(d.map.data() + static_cast<size_t>(l - 1) * 64 * 64, u, v);
+            rest -= out[l];
+        }
+
+        if (count > 0) {
+            out[0] = rest > 0.0f ? rest : 0.0f;
+        }
+
+        return count;
+    }
+
     const sxc_world_api* Api() {
         static const sxc_world_api s_api = {
             sizeof(sxc_world_api), Snapshot, AreaChain, TerrainAreaAt, TerrainHeight, TerrainSample, TerrainLiquid, LiquidCategory, Trace, AreaName,

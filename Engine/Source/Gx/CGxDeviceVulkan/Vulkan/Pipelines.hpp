@@ -126,7 +126,8 @@ namespace gxvk::vk::pipelines
     };
 
     /// SXC: one instanced draw of a run list (the instanced grass, step 7): indices of the bound index
-    /// buffer, instances of the instance-rate streams.
+    /// buffer, instances of the instance-rate streams; `copy` picks the copy stream's entry (the grass
+    /// density, step 7d: 0 the plants themselves).
     struct Run
     {
         uint32_t firstIndex    = 0;
@@ -134,6 +135,7 @@ namespace gxvk::vk::pipelines
         int32_t  vertexOffset  = 0;
         uint32_t firstInstance = 0;
         uint32_t instanceCount = 0;
+        uint32_t copy          = 0;
     };
 
     /// One draw, as the device reads it off the engine.
@@ -206,8 +208,10 @@ namespace gxvk::vk::pipelines
         /// SXC: the instanced grass (step 7): the streams fed per instance (bit per stream), the stream
         /// whose first 48 bytes are a plant's rows (a grass vertex record reads them at locations
         /// 13..15; -1 none), and the runs recorded instead of the one draw (indexed; `count` ignored).
+        /// Step 7d: the copy stream (stride 0, 16 bytes an entry: a run's `copy` binds its entry; -1 none).
         uint32_t   instanceStreams = 0;
         int32_t    plantStream     = -1;
+        int32_t    copyStream      = -1;
         const Run* runs     = nullptr;
         uint32_t   runCount = 0;
     };

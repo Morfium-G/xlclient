@@ -2,7 +2,8 @@
 // indices in one buffer pair (each model once, appended), and every chunk's plants in one pool (a plant
 // is its placement's three rows, its normal and its colour: 64 bytes), so all of a texture's plants draw
 // in one bind (the draw itself: CGxDeviceVulkan::SxcGrassDraw). A freed range of the pool is reused once
-// the frames that may still read it have completed.
+// the frames that may still read it have completed. The density's copies (step 7d) are the same runs drawn
+// again, each with its copy number from a small constant buffer.
 #pragma once
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Vk.hpp"
@@ -11,9 +12,12 @@
 
 namespace gxvk::vk::grass
 {
-    constexpr uint32_t kPlantBytes   = 80;       ///< rows 0..2 (48), normal (12), colour (4: B, G, R, A), motion (16: root V, 1 / span, wind, push)
+    /// rows 0..2 (48), normal (12), colour (4: B, G, R, A), motion (16: root V, 1 / span, wind, push), density (8:
+    /// copies, radius, spread, 0 as halves), the spot in its terrain cell (8: 2 x triangle + s, t)
+    constexpr uint32_t kPlantBytes   = 96;
     constexpr uint32_t kVertexBytes  = 20;       ///< position (12), texture coordinate (8)
-    constexpr uint32_t kMaxPlants    = 1u << 20; ///< the pool (80 MB)
+    constexpr uint32_t kMaxPlants    = 1u << 20; ///< the pool (96 MB)
+    constexpr uint32_t kMaxCopies    = 15;       ///< step 7d: copy numbers 1..15 (the copy stream's entries 0..15)
     constexpr uint32_t kMaxVertices  = 1u << 18; ///< the plant models' vertices, all together
     constexpr uint32_t kMaxIndices   = 1u << 20;
 
@@ -35,6 +39,9 @@ namespace gxvk::vk::grass
     VkBuffer MeshVertices();
     VkBuffer MeshIndices();
     VkBuffer Plants();
+    /// Step 7d: entry k (16 bytes) holds the copy number k; read at stride 0, so a run's copies all read
+    /// the entry its offset picks.
+    VkBuffer Copies();
 
     /// The pool's use (plants), for the status line.
     uint32_t PlantsInUse();

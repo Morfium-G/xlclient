@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+class C3Vector;
 class CDetailDoodadInst;
 class CGxTex;
 
@@ -13,14 +14,22 @@ class CGxTex;
 // is drawn together, instanced (the device's Vulkan/Grass and SxcGrassDraw; the stock DetailDoodad
 // vertex modules' instanced variants). The seam is CWorldScene::RenderDetailDoodads; a chunk the
 // device can't take this frame (its pool is full) is drawn the stock way.
+//
+// Density (step 7d; GroundEffectDoodadDensity through the mod's provider, sxc.grass): each plant carries
+// how many copies it wants, out to what radius from the player and how far they may stray. The chunks
+// near the player draw their runs again once per copy; the vertex shader (Shaders/GrassDensity.glsl)
+// turns and moves each copy within the plant's own terrain triangle (its plane gives the height) and
+// grows it in with the distance, so nothing is rebuilt as the player moves.
 namespace SXC::Grass {
-    // One instanced draw: a plant model's indices, its plants' range of the pool.
+    // One instanced draw: a plant model's indices, its plants' range of the pool; `copy` 0 the plants
+    // themselves, 1.. their density copies (step 7d: the vertex shader places copy k of each plant).
     struct Run {
         uint32_t firstIndex;
         uint32_t indexCount;
         int32_t vertexOffset;
         uint32_t firstInstance;
         uint32_t instanceCount;
+        uint32_t copy;
     };
 
     // What the device offers (null: no instanced grass on this renderer).
@@ -57,4 +66,16 @@ namespace SXC::Grass {
     // [Grass] Instanced (the client's Info panel switches it).
     bool Enabled();
     void SetEnabled(bool on);
+
+    // [Grass] Placement and PaintedMin (step 7d; sxc.grass set_placement): how CMapChunk::CreateDetailDoodads
+    // picks a cell's ground effect (SXC_GRASS_PLACE_*: the file's dominant layer, the paint's, or every
+    // layer by its paint above the least share). Stock grass too; a change places every chunk's plants again.
+    uint32_t Placement();
+    float PaintedMin();
+
+    // [Grass] SteepestGround and SlopeSink (step 7d; sxc.grass set_slopes): the least up part of the ground's
+    // normal a plant may stand on (stock 0.4), and how far an upright plant is lowered on a slope (yd; 0
+    // unless SlopeSink is set: the drop under its base's downhill edge x the factor).
+    float SteepestGround();
+    float SlopeSink(uint32_t doodadId, float scale, const C3Vector& normal);
 }
